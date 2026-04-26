@@ -1,0 +1,60 @@
+//@version=5
+// SuperTrend + VWAP Strategy for AI Trading Bot
+// How to use:
+//   1. Add this script to your TradingView chart (Nifty / BankNifty, 5-min)
+//   2. Go to Alerts → Create Alert → select this script → Webhook URL
+//   3. Paste your ngrok/server URL: https://xxxx.ngrok.io/webhook
+//   4. In "Message" box paste the JSON below (with your actual secret)
+//
+// Alert Message template (copy-paste into TV alert message box):
+// {"secret":"YOUR_WEBHOOK_SECRET","symbol":"NIFTY","action":"{{strategy.order.action}}","price":{{close}},"strategy":"SuperTrend_VWAP","timeframe":"5"}
+
+strategy("AI Bot — SuperTrend + VWAP", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// ── Inputs ────────────────────────────────────────────────────────────────────
+st_period  = input.int(10, "SuperTrend Period", minval=1)
+st_mult    = input.float(3.0, "SuperTrend Multiplier", step=0.1)
+rsi_period = input.int(14, "RSI Period")
+adx_min    = input.int(20, "Min ADX to trade", minval=10)
+
+// ── Indicators ────────────────────────────────────────────────────────────────
+[supertrend, direction] = ta.supertrend(st_mult, st_period)
+vwap_val   = ta.vwap(high, low, close, volume)
+rsi_val    = ta.rsi(close, rsi_period)
+[adx_val, dip, din] = ta.dmi(14, 14)
+
+// ── Entry Conditions ──────────────────────────────────────────────────────────
+long_entry  = ta.crossover(direction, 0)
+              and close > vwap_val
+              and adx_val > adx_min
+              and rsi_val > 50
+              and not na(vwap_val)
+
+short_entry = ta.crossunder(direction, 0)
+              and close < vwap_val
+              and adx_val > adx_min
+              and rsi_val < 50
+              and not na(vwap_val)
+
+// ── Time Filter (9:30 AM to 3:00 PM IST) ─────────────────────────────────────
+session_ok = not na(time("5", "0930-1500", "NSE"))
+
+// ── Strategy ──────────────────────────────────────────────────────────────────
+if long_entry and session_ok
+    strategy.entry("LONG", strategy.long)
+
+if short_entry and session_ok
+    strategy.entry("SHORT", strategy.short)
+
+// Exit on opposite signal
+if strategy.position_size > 0 and short_entry
+    strategy.close("LONG")
+if strategy.position_size < 0 and long_entry
+    strategy.close("SHORT")
+
+// ── Visuals ───────────────────────────────────────────────────────────────────
+plot(supertrend, "SuperTrend", color = direction > 0 ? color.green : color.red, linewidth=2)
+plot(vwap_val,   "VWAP",       color=color.orange, linewidth=1)
+
+plotshape(long_entry  and session_ok, "BUY",  shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(short_entry and session_ok, "SELL", shape.triangledown, location.abovebar, color.red,   size=size.small)
