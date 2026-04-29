@@ -1,0 +1,97 @@
+//@version=5
+// 1 lot Nifty = 75 units. Commission = 100 INR per order.
+strategy("14 - ATR EMA Refined (1 Lot)", overlay=true,
+         default_qty_type=strategy.fixed,
+         default_qty_value=75,
+         commission_type=strategy.commission.cash_per_order,
+         commission_value=100)
+
+// ---- Inputs
+ema_fast_len  = input.int(9,    "Fast EMA")
+ema_slow_len  = input.int(21,   "Slow EMA")
+ema_trend_len = input.int(50,   "Trend EMA")
+atr_len       = input.int(14,   "ATR Period")
+sl_mult       = input.float(1.0, "Stop Loss ATR x")
+tp_mult       = input.float(2.0, "Take Profit ATR x")
+adx_min       = input.int(22,   "Min ADX")
+
+// ---- Indicators
+ema_fast  = ta.ema(close, ema_fast_len)
+ema_slow  = ta.ema(close, ema_slow_len)
+ema_trend = ta.ema(close, ema_trend_len)
+ema_200   = ta.ema(close, 200)
+atr_val   = ta.atr(atr_len)
+vwap_val  = ta.vwap(hlc3)
+rsi_val   = ta.rsi(close, 14)
+[diplus, diminus, adx_val] = ta.dmi(14, 14)
+
+// ---- Time filter: 10:00 AM to 1:30 PM IST (cleanest trend window)
+in_session = not na(time("5", "1000-1330", "Asia/Kolkata"))
+
+// ---- Master trend: EMA 200 decides overall direction
+above_200 = close > ema_200
+below_200 = close < ema_200
+
+// ---- Trend: all EMAs stacked in same direction
+bull_trend = ema_fast > ema_slow and ema_slow > ema_trend and above_200
+bear_trend = ema_fast < ema_slow and ema_slow < ema_trend and below_200
+
+// ---- Entry: ATR momentum breakout in trend direction
+long_ok  = ta.crossover(close, ema_trend + atr_val * 1.5)
+           and bull_trend
+           and close > vwap_val
+           and rsi_val > 50 and rsi_val < 68
+           and adx_val > adx_min
+           and in_session
+
+short_ok = ta.crossunder(close, ema_trend - atr_val * 1.5)
+           and bear_trend
+           and close < vwap_val
+           and rsi_val < 50 and rsi_val > 32
+           and adx_val > adx_min
+           and in_session
+
+// ---- One trade at a time
+if long_ok and strategy.position_size == 0
+    strategy.entry("LONG", strategy.long)
+
+if short_ok and strategy.position_size == 0
+    strategy.entry("SHORT", strategy.short)
+
+// ---- Stop Loss + Take Profit
+if strategy.position_size > 0
+    strategy.exit("LONG Exit", "LONG",
+         stop  = strategy.position_avg_price - atr_val * sl_mult,
+         limit = strategy.position_avg_price + atr_val * tp_mult)
+
+if strategy.position_size < 0
+    strategy.exit("SHORT Exit", "SHORT",
+         stop  = strategy.position_avg_price + atr_val * sl_mult,
+         limit = strategy.position_avg_price - atr_val * tp_mult)
+
+// ---- Visuals
+plot(ema_fast,  "EMA 9",   color=color.aqua,   linewidth=1)
+plot(ema_slow,  "EMA 21",  color=color.orange,  linewidth=1)
+plot(ema_trend, "EMA 50",  color=color.yellow,  linewidth=2)
+plot(ema_200,   "EMA 200", color=color.white,   linewidth=2)
+plot(vwap_val,  "VWAP",    color=color.purple,  linewidth=1)
+
+bgcolor(in_session ? color.new(color.blue, 95) : na, title="Active Window")
+plotshape(long_ok,  "BUY",  shape.triangleup,   location.belowbar, color.green, size=size.normal)
+plotshape(short_ok, "SELL", shape.triangledown,  location.abovebar, color.red,   size=size.normal)
+
+// ---- Dashboard
+var table dash = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 65), border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "Trend",   text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, bull_trend ? "BULL" : bear_trend ? "BEAR" : "FLAT", text_color=bull_trend ? color.green : bear_trend ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 1, "EMA 200", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 1, above_200 ? "ABOVE" : "BELOW", text_color=above_200 ? color.green : color.red, text_size=size.small)
+    table.cell(dash, 0, 2, "RSI",     text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(math.round(rsi_val, 1)), text_color=rsi_val > 68 ? color.red : rsi_val < 32 ? color.lime : color.white, text_size=size.small)
+    table.cell(dash, 0, 3, "ADX",     text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(math.round(adx_val, 1)), text_color=adx_val > adx_min ? color.green : color.red, text_size=size.small)
+    table.cell(dash, 0, 4, "ATR",     text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 4, str.tostring(math.round(atr_val, 1)), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 5, "Session", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 5, in_session ? "ACTIVE" : "CLOSED", text_color=in_session ? color.green : color.gray, text_size=size.small)

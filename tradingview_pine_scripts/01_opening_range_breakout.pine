@@ -1,0 +1,40 @@
+//@version=5
+strategy("01 - Opening Range Breakout", overlay=true)
+
+in_opening = not na(time("5", "0915-0930", "Asia/Kolkata"))
+in_session = not na(time("5", "0930-1500", "Asia/Kolkata"))
+
+var float orb_high = na
+var float orb_low = na
+var bool orb_set = false
+
+if dayofweek != dayofweek[1]
+    orb_high := na
+    orb_low := na
+    orb_set := false
+
+if in_opening
+    orb_high := na(orb_high) ? high : math.max(orb_high, high)
+    orb_low := na(orb_low) ? low : math.min(orb_low, low)
+
+if not in_opening and not na(orb_high)
+    orb_set := true
+
+long_ok = orb_set and ta.crossover(close, orb_high) and in_session
+short_ok = orb_set and ta.crossunder(close, orb_low) and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and short_ok
+    strategy.close("LONG")
+if strategy.position_size < 0 and long_ok
+    strategy.close("SHORT")
+
+plot(orb_high, "ORB High", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(orb_low, "ORB Low", color=color.red, style=plot.style_linebr, linewidth=2)
+bgcolor(in_opening ? color.new(color.yellow, 85) : in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)

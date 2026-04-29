@@ -1,0 +1,38 @@
+//@version=5
+strategy("09 - RSI Divergence + VWAP", overlay=true)
+
+rsi_len = input.int(14, "RSI Period")
+lb = input.int(5, "Divergence Lookback bars")
+
+rsi_val = ta.rsi(close, rsi_len)
+vwap_val = ta.vwap(hlc3)
+
+in_session = not na(time("5", "0930-1500", "Asia/Kolkata"))
+
+// Bullish divergence: price makes lower low, RSI makes higher low
+price_ll = low < ta.lowest(low, lb)[1]
+rsi_hl = rsi_val > ta.lowest(rsi_val, lb)[1]
+bull_div = price_ll and rsi_hl and close > vwap_val and rsi_val < 45
+
+// Bearish divergence: price makes higher high, RSI makes lower high
+price_hh = high > ta.highest(high, lb)[1]
+rsi_lh = rsi_val < ta.highest(rsi_val, lb)[1]
+bear_div = price_hh and rsi_lh and close < vwap_val and rsi_val > 55
+
+long_ok = bull_div and in_session
+short_ok = bear_div and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and rsi_val > 65
+    strategy.close("LONG")
+if strategy.position_size < 0 and rsi_val < 35
+    strategy.close("SHORT")
+
+plot(vwap_val, "VWAP", color=color.orange, linewidth=1)
+bgcolor(in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)

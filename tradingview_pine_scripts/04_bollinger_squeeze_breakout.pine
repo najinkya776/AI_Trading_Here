@@ -1,0 +1,33 @@
+//@version=5
+strategy("04 - Bollinger Band Squeeze Breakout", overlay=true)
+
+bb_len = input.int(20, "BB Length")
+bb_mult = input.float(2.0, "BB Multiplier")
+
+[bb_mid, bb_upper, bb_lower] = ta.bb(close, bb_len, bb_mult)
+bb_width = (bb_upper - bb_lower) / bb_mid
+avg_width = ta.sma(bb_width, 20)
+
+in_squeeze = bb_width < avg_width * 0.8
+in_session = not na(time("5", "0930-1500", "Asia/Kolkata"))
+
+long_ok = in_squeeze[1] and ta.crossover(close, bb_upper) and in_session
+short_ok = in_squeeze[1] and ta.crossunder(close, bb_lower) and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and ta.crossunder(close, bb_mid)
+    strategy.close("LONG")
+if strategy.position_size < 0 and ta.crossover(close, bb_mid)
+    strategy.close("SHORT")
+
+plot(bb_upper, "BB Upper", color=color.red, linewidth=1)
+plot(bb_mid, "BB Mid", color=color.gray, linewidth=1)
+plot(bb_lower, "BB Lower", color=color.green, linewidth=1)
+bgcolor(in_squeeze ? color.new(color.yellow, 88) : na, title="Squeeze Active")
+bgcolor(in_session ? color.new(color.blue, 95) : na, title="Session")
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)

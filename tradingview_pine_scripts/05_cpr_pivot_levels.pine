@@ -1,0 +1,38 @@
+//@version=5
+strategy("05 - CPR + Previous Day Levels", overlay=true)
+
+prev_high = request.security(syminfo.tickerid, "D", high[1])
+prev_low = request.security(syminfo.tickerid, "D", low[1])
+prev_close = request.security(syminfo.tickerid, "D", close[1])
+
+pivot = (prev_high + prev_low + prev_close) / 3
+bc = (prev_high + prev_low) / 2
+tc = (pivot - bc) + pivot
+
+cpr_width = math.abs(tc - bc)
+avg_cpr = ta.sma(cpr_width, 10)
+narrow_cpr = cpr_width < avg_cpr
+
+in_session = not na(time("5", "0930-1500", "Asia/Kolkata"))
+
+long_ok = narrow_cpr and ta.crossover(close, tc) and in_session
+short_ok = narrow_cpr and ta.crossunder(close, bc) and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and close < pivot
+    strategy.close("LONG")
+if strategy.position_size < 0 and close > pivot
+    strategy.close("SHORT")
+
+plot(tc, "Top CPR", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(pivot, "Pivot", color=color.orange, style=plot.style_linebr, linewidth=1)
+plot(bc, "Bottom CPR", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(prev_high, "Prev High", color=color.blue, style=plot.style_linebr, linewidth=1)
+plot(prev_low, "Prev Low", color=color.purple, style=plot.style_linebr, linewidth=1)
+bgcolor(in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)

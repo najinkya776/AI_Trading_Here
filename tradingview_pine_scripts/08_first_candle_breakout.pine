@@ -1,0 +1,44 @@
+//@version=5
+strategy("08 - First Candle Breakout (9:15)", overlay=true)
+
+var float first_high = na
+var float first_low = na
+var bool levels_set = false
+
+first_candle = not na(time("5", "0915-0920", "Asia/Kolkata"))
+in_session = not na(time("5", "0920-1500", "Asia/Kolkata"))
+
+if dayofweek != dayofweek[1]
+    first_high := na
+    first_low := na
+    levels_set := false
+
+if first_candle
+    first_high := na(first_high) ? high : math.max(first_high, high)
+    first_low := na(first_low) ? low : math.min(first_low, low)
+
+if not first_candle and not na(first_high)
+    levels_set := true
+
+atr_val = ta.atr(14)
+candle_range = first_high - first_low
+range_ok = candle_range < atr_val * 3
+
+long_ok = levels_set and range_ok and ta.crossover(close, first_high) and in_session
+short_ok = levels_set and range_ok and ta.crossunder(close, first_low) and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and short_ok
+    strategy.close("LONG")
+if strategy.position_size < 0 and long_ok
+    strategy.close("SHORT")
+
+plot(first_high, "First Candle High", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(first_low, "First Candle Low", color=color.red, style=plot.style_linebr, linewidth=2)
+bgcolor(first_candle ? color.new(color.yellow, 85) : in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)

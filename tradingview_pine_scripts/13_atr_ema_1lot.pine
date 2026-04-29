@@ -1,0 +1,79 @@
+//@version=5
+// 1 lot Nifty = 75 units. Commission = 100 INR per trade (entry + exit = 200 INR round trip).
+// Each 10-point move on Nifty = 75 x 10 = 750 INR. Commission is now realistic.
+strategy("13 - ATR Trend EMA (1 Lot Realistic)", overlay=true,
+         default_qty_type=strategy.fixed,
+         default_qty_value=75,
+         commission_type=strategy.commission.cash_per_order,
+         commission_value=100)
+
+// ---- Inputs
+ema_fast_len  = input.int(9,    "Fast EMA")
+ema_slow_len  = input.int(21,   "Slow EMA")
+ema_trend_len = input.int(50,   "Trend EMA")
+atr_len       = input.int(14,   "ATR Period")
+sl_mult       = input.float(1.5, "Stop Loss ATR x")
+tp_mult       = input.float(3.0, "Take Profit ATR x (2:1 RR)")
+adx_min       = input.int(20,   "Min ADX")
+
+// ---- Indicators
+ema_fast  = ta.ema(close, ema_fast_len)
+ema_slow  = ta.ema(close, ema_slow_len)
+ema_trend = ta.ema(close, ema_trend_len)
+atr_val   = ta.atr(atr_len)
+vwap_val  = ta.vwap(hlc3)
+rsi_val   = ta.rsi(close, 14)
+[diplus, diminus, adx_val] = ta.dmi(14, 14)
+
+// ---- Session
+in_session = not na(time("5", "0930-1445", "Asia/Kolkata"))
+
+// ---- Trend: all EMAs must be stacked
+bull_trend = ema_fast > ema_slow and ema_slow > ema_trend and close > ema_trend
+bear_trend = ema_fast < ema_slow and ema_slow < ema_trend and close < ema_trend
+
+// ---- Entry: price breaks ATR zone above/below trend EMA
+long_ok  = ta.crossover(close, ema_trend + atr_val * 1.5) and bull_trend and close > vwap_val and rsi_val > 50 and rsi_val < 70 and adx_val > adx_min and in_session
+short_ok = ta.crossunder(close, ema_trend - atr_val * 1.5) and bear_trend and close < vwap_val and rsi_val < 50 and rsi_val > 30 and adx_val > adx_min and in_session
+
+// ---- Orders
+if long_ok and strategy.position_size == 0
+    strategy.entry("LONG", strategy.long)
+
+if short_ok and strategy.position_size == 0
+    strategy.entry("SHORT", strategy.short)
+
+// ---- ATR Stop Loss + Take Profit
+if strategy.position_size > 0
+    strategy.exit("LONG Exit", "LONG",
+         stop  = strategy.position_avg_price - atr_val * sl_mult,
+         limit = strategy.position_avg_price + atr_val * tp_mult)
+
+if strategy.position_size < 0
+    strategy.exit("SHORT Exit", "SHORT",
+         stop  = strategy.position_avg_price + atr_val * sl_mult,
+         limit = strategy.position_avg_price - atr_val * tp_mult)
+
+// ---- Visuals
+plot(ema_fast,  "EMA 9",  color=color.aqua,   linewidth=1)
+plot(ema_slow,  "EMA 21", color=color.orange,  linewidth=1)
+plot(ema_trend, "EMA 50", color=color.yellow,  linewidth=2)
+plot(vwap_val,  "VWAP",   color=color.purple,  linewidth=1)
+
+bgcolor(in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok,  "BUY",  shape.triangleup,   location.belowbar, color.green, size=size.normal)
+plotshape(short_ok, "SELL", shape.triangledown,  location.abovebar, color.red,   size=size.normal)
+
+// ---- Dashboard
+var table dash = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 65), border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "Trend", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, bull_trend ? "BULL" : bear_trend ? "BEAR" : "FLAT", text_color=bull_trend ? color.green : bear_trend ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 1, "RSI",   text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(math.round(rsi_val, 1)), text_color=rsi_val > 70 ? color.red : rsi_val < 30 ? color.lime : color.white, text_size=size.small)
+    table.cell(dash, 0, 2, "ADX",   text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(math.round(adx_val, 1)), text_color=adx_val > adx_min ? color.green : color.red, text_size=size.small)
+    table.cell(dash, 0, 3, "ATR",   text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(math.round(atr_val, 1)), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 4, "VWAP",  text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 4, str.tostring(math.round(vwap_val, 1)), text_color=color.orange, text_size=size.small)

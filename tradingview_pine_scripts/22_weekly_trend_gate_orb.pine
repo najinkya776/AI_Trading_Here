@@ -1,0 +1,205 @@
+//@version=5
+// Strategy 22: Weekly Trend Gate ORB
+// Logic:
+//   - Weekly EMA 20 sets the PRIMARY direction (most reliable filter)
+//   - Bull week (close > weekly EMA20): LONG trades free, SHORT only if daily also bearish
+//   - Bear week (close < weekly EMA20): SHORT trades free, LONG only if daily also bullish
+//   - Conflicting signals (e.g. bull week + neutral day) = follow weekly trend
+//   - This eliminates Oct-Jan losing period (Nifty was in weekly downtrend)
+// Base: #21 Smart Bias ORB core (body 45%, candle 12pts, ADX 16, retest, max 3/day)
+// Budget: 20,000 INR | 1 lot = 75 units | Commission: 100 INR | TP=40pts | SL=20pts
+strategy("22 - Weekly Trend Gate ORB (1 Lot)", overlay=true,
+         default_qty_type=strategy.fixed,
+         default_qty_value=75,
+         commission_type=strategy.commission.cash_per_order,
+         commission_value=100)
+
+// ---- Inputs
+tp_points  = input.float(40.0, "Take Profit (points)")
+sl_points  = input.float(20.0, "Stop Loss (points)")
+adx_min    = input.int(16, "Min ADX")
+max_trades = input.int(3, "Max trades per day")
+
+// ============================================================
+// WEEKLY TREND — primary direction gate
+// Uses previous completed week's close vs weekly EMA 20
+// lookahead_off = no future data, safe for backtesting
+// ============================================================
+w_close = request.security(syminfo.tickerid, "W", close, lookahead=barmerge.lookahead_off)
+w_ema20 = request.security(syminfo.tickerid, "W", ta.ema(close, 20), lookahead=barmerge.lookahead_off)
+
+weekly_bull = w_close > w_ema20
+weekly_bear = w_close < w_ema20
+
+// ============================================================
+// DAILY BIAS — secondary confirmation
+// Previous day candlestick patterns (8 patterns)
+// ============================================================
+d_open  = request.security(syminfo.tickerid, "D", open[1],  lookahead=barmerge.lookahead_on)
+d_high  = request.security(syminfo.tickerid, "D", high[1],  lookahead=barmerge.lookahead_on)
+d_low   = request.security(syminfo.tickerid, "D", low[1],   lookahead=barmerge.lookahead_on)
+d_close = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+d2_open  = request.security(syminfo.tickerid, "D", open[2],  lookahead=barmerge.lookahead_on)
+d2_close = request.security(syminfo.tickerid, "D", close[2], lookahead=barmerge.lookahead_on)
+
+d_body  = math.abs(d_close - d_open)
+d_range = d_high - d_low
+d2_body = math.abs(d2_close - d2_open)
+d_uwick = d_high - math.max(d_close, d_open)
+d_lwick = math.min(d_close, d_open) - d_low
+
+d_bull_engulfing = d_close > d_open and d2_close < d2_open and d_close > d2_open and d_open < d2_close and d_body > d2_body
+d_hammer         = d_close > d_open and d_range > 0 and d_lwick >= d_body * 2.0 and d_uwick <= d_body * 0.5
+d_bull_marubozu  = d_close > d_open and d_range > 0 and d_body >= d_range * 0.75
+d_strong_bull    = d_range > 0 and (d_close - d_low) / d_range > 0.70 and d_close > d_open
+
+d_bear_engulfing = d_close < d_open and d2_close > d2_open and d_close < d2_open and d_open > d2_close and d_body > d2_body
+d_shooting_star  = d_close < d_open and d_range > 0 and d_uwick >= d_body * 2.0 and d_lwick <= d_body * 0.5
+d_bear_marubozu  = d_close < d_open and d_range > 0 and d_body >= d_range * 0.75
+d_strong_bear    = d_range > 0 and (d_high - d_close) / d_range > 0.70 and d_close < d_open
+
+daily_bull_raw = d_bull_engulfing or d_hammer or d_bull_marubozu or d_strong_bull
+daily_bear_raw = d_bear_engulfing or d_shooting_star or d_bear_marubozu or d_strong_bear
+
+daily_bull    = daily_bull_raw and not daily_bear_raw
+daily_bear    = daily_bear_raw and not daily_bull_raw
+daily_neutral = not daily_bull_raw and not daily_bear_raw
+
+// ============================================================
+// COMBINED BIAS LOGIC
+//   Bull week -> LONG freely | SHORT only if daily also bearish
+//   Bear week -> SHORT freely | LONG only if daily also bullish
+// ============================================================
+long_bias_ok  = weekly_bull or (weekly_bear and daily_bull)
+short_bias_ok = weekly_bear or (weekly_bull and daily_bear)
+
+// ============================================================
+// 5-MIN INDICATORS
+// ============================================================
+ema_50   = ta.ema(close, 50)
+ema_200  = ta.ema(close, 200)
+atr_val  = ta.atr(14)
+rsi_val  = ta.rsi(close, 14)
+vwap_val = ta.vwap(hlc3)
+[diplus, diminus, adx_val] = ta.dmi(14, 14)
+
+// ---- Time windows
+in_opening = not na(time("5", "0915-0930", "Asia/Kolkata"))
+in_session = not na(time("5", "0930-1400", "Asia/Kolkata"))
+
+// ---- Daily reset
+var float orb_high     = na
+var float orb_low      = na
+var bool  orb_done     = false
+var int   trades_today = 0
+
+if dayofweek != dayofweek[1]
+    orb_high     := na
+    orb_low      := na
+    orb_done     := false
+    trades_today := 0
+
+// ---- Build opening range (9:15-9:30)
+if in_opening
+    orb_high := na(orb_high) ? high : math.max(orb_high, high)
+    orb_low  := na(orb_low)  ? low  : math.min(orb_low, low)
+if not in_opening and not na(orb_high)
+    orb_done := true
+
+// ---- Candle quality (same as #17 / #21)
+cbody  = math.abs(close - open)
+crange = high - low
+strong_candle = crange > 0 and cbody >= crange * 0.45 and crange > atr_val * 0.4 and crange > 12
+
+// ---- Trend and gate
+bull_trend  = close > ema_50 and close > ema_200
+bear_trend  = close < ema_50 and close < ema_200
+is_trending = adx_val > adx_min
+no_trade    = strategy.position_size != 0 or trades_today >= max_trades
+
+// ============================================================
+// ENTRY SIGNALS
+// ============================================================
+
+// Primary ORB breakout
+long_ok = orb_done and
+          ta.crossover(close, orb_high) and
+          long_bias_ok and
+          bull_trend and
+          close > vwap_val and
+          rsi_val > 48 and rsi_val < 72 and
+          is_trending and
+          strong_candle and
+          in_session and
+          not no_trade
+
+short_ok = orb_done and
+           ta.crossunder(close, orb_low) and
+           short_bias_ok and
+           bear_trend and
+           close < vwap_val and
+           rsi_val < 52 and rsi_val > 28 and
+           is_trending and
+           strong_candle and
+           in_session and
+           not no_trade
+
+// ORB retest entries
+orb_retest_long  = orb_done and close > orb_high and low <= orb_high * 1.001 and long_bias_ok and bull_trend and rsi_val > 45 and rsi_val < 65 and is_trending and strong_candle and in_session and trades_today >= 1 and not no_trade
+orb_retest_short = orb_done and close < orb_low  and high >= orb_low * 0.999  and short_bias_ok and bear_trend and rsi_val < 55 and rsi_val > 35 and is_trending and strong_candle and in_session and trades_today >= 1 and not no_trade
+
+// ---- Execute
+if long_ok or orb_retest_long
+    strategy.entry("LONG", strategy.long)
+    trades_today := trades_today + 1
+
+if short_ok or orb_retest_short
+    strategy.entry("SHORT", strategy.short)
+    trades_today := trades_today + 1
+
+// ---- Fixed TP / SL
+if strategy.position_size > 0
+    strategy.exit("LONG Exit", "LONG", limit=strategy.position_avg_price + tp_points, stop=strategy.position_avg_price - sl_points)
+
+if strategy.position_size < 0
+    strategy.exit("SHORT Exit", "SHORT", limit=strategy.position_avg_price - tp_points, stop=strategy.position_avg_price + sl_points)
+
+// ============================================================
+// VISUALS
+// ============================================================
+plot(orb_high, "ORB High", color=color.new(color.green, 20), style=plot.style_linebr, linewidth=2)
+plot(orb_low,  "ORB Low",  color=color.new(color.red,   20), style=plot.style_linebr, linewidth=2)
+plot(ema_50,   "EMA 50",   color=color.yellow, linewidth=1)
+plot(ema_200,  "EMA 200",  color=color.white,  linewidth=2)
+plot(vwap_val, "VWAP",     color=color.orange, linewidth=1)
+plot(w_ema20,  "W-EMA20",  color=color.new(color.purple, 30), linewidth=2)
+
+bgcolor(weekly_bull   ? color.new(color.green,  94) : weekly_bear ? color.new(color.red, 94) : na, title="Weekly Trend")
+bgcolor(in_opening    ? color.new(color.yellow, 82) : na, title="Opening Range")
+
+plotshape(long_ok  or orb_retest_long,  "BUY",  shape.triangleup,   location.belowbar, color.green, size=size.large)
+plotshape(short_ok or orb_retest_short, "SELL", shape.triangledown,  location.abovebar, color.red,   size=size.large)
+
+// ---- Dashboard
+var table dash = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 60), border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "W-Trend",    text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, weekly_bull ? "BULL" : "BEAR", text_color=weekly_bull ? color.green : color.red, text_size=size.small)
+    table.cell(dash, 0, 1, "W-EMA20",    text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(math.round(w_ema20, 0)), text_color=color.purple, text_size=size.small)
+    table.cell(dash, 0, 2, "Daily Bias", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 2, daily_bull ? "BULL" : daily_bear ? "BEAR" : "NEUTRAL", text_color=daily_bull ? color.green : daily_bear ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 3, "Daily Pat",  text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 3, d_bull_engulfing ? "Bull Engulf" : d_hammer ? "Hammer" : d_bull_marubozu ? "Bull Maru" : d_strong_bull ? "Strong Bull" : d_bear_engulfing ? "Bear Engulf" : d_shooting_star ? "Shoot Star" : d_bear_marubozu ? "Bear Maru" : d_strong_bear ? "Strong Bear" : "None", text_color=daily_bull ? color.green : daily_bear ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 4, "ORB H/L",   text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 4, na(orb_high) ? "---" : str.tostring(math.round(orb_high, 0)) + "/" + str.tostring(math.round(orb_low, 0)), text_color=color.orange, text_size=size.small)
+    table.cell(dash, 0, 5, "5m Trend",  text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 5, bull_trend ? "BULL" : bear_trend ? "BEAR" : "FLAT", text_color=bull_trend ? color.green : bear_trend ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 6, "ADX",       text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 6, str.tostring(math.round(adx_val, 1)), text_color=adx_val > adx_min ? color.green : color.red, text_size=size.small)
+    table.cell(dash, 0, 7, "RSI",       text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 7, str.tostring(math.round(rsi_val, 1)), text_color=rsi_val > 72 ? color.red : rsi_val < 28 ? color.lime : color.white, text_size=size.small)
+    table.cell(dash, 0, 8, "Trades",    text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 8, str.tostring(trades_today) + "/" + str.tostring(max_trades), text_color=trades_today >= max_trades ? color.red : color.green, text_size=size.small)
+    table.cell(dash, 0, 9, "Mode",      text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 9, weekly_bull ? "LONG FREE" : "SHORT FREE", text_color=weekly_bull ? color.green : color.red, text_size=size.small)

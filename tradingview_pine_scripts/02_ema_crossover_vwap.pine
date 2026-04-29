@@ -1,0 +1,31 @@
+//@version=5
+strategy("02 - EMA 9/21 Crossover + VWAP", overlay=true)
+
+ema_fast = input.int(9, "Fast EMA")
+ema_slow = input.int(21, "Slow EMA")
+
+ema9 = ta.ema(close, ema_fast)
+ema21 = ta.ema(close, ema_slow)
+vwap_val = ta.vwap(hlc3)
+
+in_session = not na(time("5", "0930-1500", "Asia/Kolkata"))
+
+long_ok = ta.crossover(ema9, ema21) and close > vwap_val and in_session
+short_ok = ta.crossunder(ema9, ema21) and close < vwap_val and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and short_ok
+    strategy.close("LONG")
+if strategy.position_size < 0 and long_ok
+    strategy.close("SHORT")
+
+plot(ema9, "EMA 9", color=color.blue, linewidth=1)
+plot(ema21, "EMA 21", color=color.orange, linewidth=1)
+plot(vwap_val, "VWAP", color=color.purple, linewidth=1)
+bgcolor(in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)

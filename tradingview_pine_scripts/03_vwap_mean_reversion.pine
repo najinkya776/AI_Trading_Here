@@ -1,0 +1,31 @@
+//@version=5
+strategy("03 - VWAP Mean Reversion", overlay=true)
+
+stretch = input.float(1.5, "ATR stretch multiplier")
+rsi_len = input.int(14, "RSI Period")
+
+vwap_val = ta.vwap(hlc3)
+atr_val = ta.atr(14)
+rsi_val = ta.rsi(close, rsi_len)
+
+in_session = not na(time("5", "0930-1500", "Asia/Kolkata"))
+
+long_ok = close < vwap_val - (atr_val * stretch) and rsi_val < 35 and in_session
+short_ok = close > vwap_val + (atr_val * stretch) and rsi_val > 65 and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and close >= vwap_val
+    strategy.close("LONG")
+if strategy.position_size < 0 and close <= vwap_val
+    strategy.close("SHORT")
+
+plot(vwap_val, "VWAP", color=color.orange, linewidth=2)
+plot(vwap_val + atr_val * stretch, "Upper Band", color=color.red, linewidth=1)
+plot(vwap_val - atr_val * stretch, "Lower Band", color=color.green, linewidth=1)
+bgcolor(in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)

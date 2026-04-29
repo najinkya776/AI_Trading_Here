@@ -1,0 +1,200 @@
+//@version=5
+// Multi-Timeframe Strategy:
+// Step 1 - Daily candlestick pattern sets today's BIAS (Bull / Bear / Neutral)
+// Step 2 - 5-min ORB breakout trades ONLY in the direction of the daily bias
+// Budget: 20,000 INR | 1 lot = 75 units | Commission: 100 INR | TP=40pts | SL=20pts
+strategy("19 - MTF Daily Bias + ORB (1 Lot)", overlay=true,
+         default_qty_type=strategy.fixed,
+         default_qty_value=75,
+         commission_type=strategy.commission.cash_per_order,
+         commission_value=100)
+
+// ---- Inputs
+tp_points  = input.float(40.0, "Take Profit (points)")
+sl_points  = input.float(20.0, "Stop Loss (points)")
+adx_min    = input.int(16, "Min ADX")
+max_trades = input.int(3, "Max trades per day")
+
+// ============================================================
+// STEP 1 — DAILY TIMEFRAME: CANDLESTICK BIAS
+// ============================================================
+
+// Fetch previous day OHLC (index 1 = yesterday's completed candle)
+d_open  = request.security(syminfo.tickerid, "D", open[1],  lookahead=barmerge.lookahead_on)
+d_high  = request.security(syminfo.tickerid, "D", high[1],  lookahead=barmerge.lookahead_on)
+d_low   = request.security(syminfo.tickerid, "D", low[1],   lookahead=barmerge.lookahead_on)
+d_close = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+
+// Two days ago (for patterns that need 2 candles like Engulfing)
+d2_open  = request.security(syminfo.tickerid, "D", open[2],  lookahead=barmerge.lookahead_on)
+d2_high  = request.security(syminfo.tickerid, "D", high[2],  lookahead=barmerge.lookahead_on)
+d2_low   = request.security(syminfo.tickerid, "D", low[2],   lookahead=barmerge.lookahead_on)
+d2_close = request.security(syminfo.tickerid, "D", close[2], lookahead=barmerge.lookahead_on)
+
+// Daily candle measurements
+d_body  = math.abs(d_close - d_open)
+d_range = d_high - d_low
+d_uwick = d_high - math.max(d_close, d_open)
+d_lwick = math.min(d_close, d_open) - d_low
+
+d2_body  = math.abs(d2_close - d2_open)
+d2_range = d2_high - d2_low
+
+// ---- Daily Bullish Patterns
+// 1. Bullish Engulfing: yesterday bull candle engulfs day-before bear candle
+d_bull_engulfing = d_close > d_open and d2_close < d2_open and d_close > d2_open and d_open < d2_close and d_body > d2_body
+
+// 2. Hammer: lower wick 2x+ body, tiny upper wick, bullish close
+d_hammer = d_close > d_open and d_range > 0 and d_lwick >= d_body * 2.0 and d_uwick <= d_body * 0.5
+
+// 3. Bull Marubozu: strong bull candle, body 75%+ of range
+d_bull_marubozu = d_close > d_open and d_range > 0 and d_body >= d_range * 0.75
+
+// 4. Strong Bull Day: yesterday closed in top 30% of its range (bulls in control)
+d_strong_bull = d_range > 0 and (d_close - d_low) / d_range > 0.70 and d_close > d_open
+
+// ---- Daily Bearish Patterns
+// 1. Bearish Engulfing
+d_bear_engulfing = d_close < d_open and d2_close > d2_open and d_close < d2_open and d_open > d2_close and d_body > d2_body
+
+// 2. Shooting Star
+d_shooting_star = d_close < d_open and d_range > 0 and d_uwick >= d_body * 2.0 and d_lwick <= d_body * 0.5
+
+// 3. Bear Marubozu
+d_bear_marubozu = d_close < d_open and d_range > 0 and d_body >= d_range * 0.75
+
+// 4. Strong Bear Day: yesterday closed in bottom 30% of its range
+d_strong_bear = d_range > 0 and (d_high - d_close) / d_range > 0.70 and d_close < d_open
+
+// ---- Daily Bias (any one pattern sets the bias)
+daily_bull_bias = d_bull_engulfing or d_hammer or d_bull_marubozu or d_strong_bull
+daily_bear_bias = d_bear_engulfing or d_shooting_star or d_bear_marubozu or d_strong_bear
+
+// If both fire (rare) — neutral, skip trading
+daily_bias_bull = daily_bull_bias and not daily_bear_bias
+daily_bias_bear = daily_bear_bias and not daily_bull_bias
+daily_bias_neutral = not daily_bull_bias and not daily_bear_bias
+
+// ============================================================
+// STEP 2 — 5-MIN: ORB BREAKOUT IN BIAS DIRECTION
+// ============================================================
+
+ema_50   = ta.ema(close, 50)
+ema_200  = ta.ema(close, 200)
+atr_val  = ta.atr(14)
+rsi_val  = ta.rsi(close, 14)
+vwap_val = ta.vwap(hlc3)
+[diplus, diminus, adx_val] = ta.dmi(14, 14)
+
+in_opening = not na(time("5", "0915-0930", "Asia/Kolkata"))
+in_session = not na(time("5", "0930-1400", "Asia/Kolkata"))
+
+var float orb_high     = na
+var float orb_low      = na
+var bool  orb_done     = false
+var int   trades_today = 0
+
+if dayofweek != dayofweek[1]
+    orb_high     := na
+    orb_low      := na
+    orb_done     := false
+    trades_today := 0
+
+if in_opening
+    orb_high := na(orb_high) ? high : math.max(orb_high, high)
+    orb_low  := na(orb_low)  ? low  : math.min(orb_low, low)
+if not in_opening and not na(orb_high)
+    orb_done := true
+
+// 5-min trend filters
+bull_trend  = close > ema_50 and close > ema_200
+bear_trend  = close < ema_50 and close < ema_200
+no_trade    = strategy.position_size != 0 or trades_today >= max_trades
+is_trending = adx_val > adx_min
+
+// 5-min candle quality
+cbody  = math.abs(close - open)
+crange = high - low
+strong_candle = crange > 0 and cbody >= crange * 0.45 and crange > atr_val * 0.4
+
+// ---- FINAL SIGNALS: ORB breakout must align with daily bias
+long_ok = orb_done and
+          ta.crossover(close, orb_high) and
+          daily_bias_bull and
+          bull_trend and
+          close > vwap_val and
+          rsi_val > 48 and rsi_val < 72 and
+          is_trending and
+          strong_candle and
+          in_session and
+          not no_trade
+
+short_ok = orb_done and
+           ta.crossunder(close, orb_low) and
+           daily_bias_bear and
+           bear_trend and
+           close < vwap_val and
+           rsi_val < 52 and rsi_val > 28 and
+           is_trending and
+           strong_candle and
+           in_session and
+           not no_trade
+
+// ---- Retest entries (same direction as bias)
+orb_retest_long  = orb_done and close > orb_high and low <= orb_high * 1.001 and daily_bias_bull and bull_trend and rsi_val > 45 and rsi_val < 65 and is_trending and strong_candle and in_session and trades_today >= 1 and not no_trade
+orb_retest_short = orb_done and close < orb_low  and high >= orb_low * 0.999  and daily_bias_bear and bear_trend and rsi_val < 55 and rsi_val > 35 and is_trending and strong_candle and in_session and trades_today >= 1 and not no_trade
+
+// ---- Execute
+if long_ok or orb_retest_long
+    strategy.entry("LONG", strategy.long)
+    trades_today := trades_today + 1
+
+if short_ok or orb_retest_short
+    strategy.entry("SHORT", strategy.short)
+    trades_today := trades_today + 1
+
+if strategy.position_size > 0
+    strategy.exit("LONG Exit", "LONG", limit=strategy.position_avg_price + tp_points, stop=strategy.position_avg_price - sl_points)
+
+if strategy.position_size < 0
+    strategy.exit("SHORT Exit", "SHORT", limit=strategy.position_avg_price - tp_points, stop=strategy.position_avg_price + sl_points)
+
+// ============================================================
+// VISUALS
+// ============================================================
+
+plot(orb_high, "ORB High", color=color.new(color.green, 20), style=plot.style_linebr, linewidth=2)
+plot(orb_low,  "ORB Low",  color=color.new(color.red,   20), style=plot.style_linebr, linewidth=2)
+plot(ema_50,   "EMA 50",   color=color.yellow, linewidth=1)
+plot(ema_200,  "EMA 200",  color=color.white,  linewidth=2)
+plot(vwap_val, "VWAP",     color=color.orange, linewidth=1)
+
+// Background: daily bias colour
+bgcolor(daily_bias_bull    ? color.new(color.green, 92) : daily_bias_bear ? color.new(color.red, 92) : na, title="Daily Bias")
+bgcolor(in_opening         ? color.new(color.yellow, 85) : na, title="Opening Range")
+bgcolor(in_session and not in_opening and not daily_bias_bull and not daily_bias_bear ? color.new(color.gray, 95) : na, title="Neutral Day")
+
+plotshape(long_ok  or orb_retest_long,  "BUY",  shape.triangleup,   location.belowbar, color.green, size=size.large)
+plotshape(short_ok or orb_retest_short, "SELL", shape.triangledown,  location.abovebar, color.red,   size=size.large)
+
+// ---- Dashboard
+var table dash = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 60), border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "Daily Bias", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, daily_bias_bull ? "BULL" : daily_bias_bear ? "BEAR" : "NEUTRAL", text_color=daily_bias_bull ? color.green : daily_bias_bear ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 1, "Pattern",    text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 1, d_bull_engulfing ? "Bull Engulf" : d_hammer ? "Hammer" : d_bull_marubozu ? "Bull Maru" : d_strong_bull ? "Strong Bull" : d_bear_engulfing ? "Bear Engulf" : d_shooting_star ? "Shoot Star" : d_bear_marubozu ? "Bear Maru" : d_strong_bear ? "Strong Bear" : "None", text_color=daily_bias_bull ? color.green : daily_bias_bear ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 2, "ORB H/L",   text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 2, na(orb_high) ? "---" : str.tostring(math.round(orb_high, 0)) + "/" + str.tostring(math.round(orb_low, 0)), text_color=color.orange, text_size=size.small)
+    table.cell(dash, 0, 3, "5m Trend",  text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 3, bull_trend ? "BULL" : bear_trend ? "BEAR" : "FLAT", text_color=bull_trend ? color.green : bear_trend ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 4, "ADX",       text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 4, str.tostring(math.round(adx_val, 1)), text_color=adx_val > adx_min ? color.green : color.red, text_size=size.small)
+    table.cell(dash, 0, 5, "RSI",       text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 5, str.tostring(math.round(rsi_val, 1)), text_color=rsi_val > 72 ? color.red : rsi_val < 28 ? color.lime : color.white, text_size=size.small)
+    table.cell(dash, 0, 6, "VWAP",      text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 6, str.tostring(math.round(vwap_val, 1)), text_color=color.orange, text_size=size.small)
+    table.cell(dash, 0, 7, "Trades",    text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 7, str.tostring(trades_today) + "/" + str.tostring(max_trades), text_color=trades_today >= max_trades ? color.red : color.green, text_size=size.small)
+    table.cell(dash, 0, 8, "Budget",    text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 8, "20K | 1 Lot", text_color=color.aqua, text_size=size.small)

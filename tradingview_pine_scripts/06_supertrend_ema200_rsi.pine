@@ -1,0 +1,35 @@
+//@version=5
+strategy("06 - SuperTrend + EMA200 + RSI (Improved)", overlay=true)
+
+st_period = input.int(10, "SuperTrend Period")
+st_mult = input.float(3.0, "SuperTrend Multiplier")
+rsi_len = input.int(14, "RSI Period")
+adx_min = input.int(25, "Min ADX")
+
+[st, dir] = ta.supertrend(st_mult, st_period)
+ema200 = ta.ema(close, 200)
+vwap_val = ta.vwap(hlc3)
+rsi_val = ta.rsi(close, rsi_len)
+[diplus, diminus, adx_val] = ta.dmi(14, 14)
+
+in_session = not na(time("5", "0930-1500", "Asia/Kolkata"))
+
+long_ok = ta.crossunder(dir, 0) and close > vwap_val and close > ema200 and adx_val > adx_min and rsi_val > 50 and in_session
+short_ok = ta.crossover(dir, 0) and close < vwap_val and close < ema200 and adx_val > adx_min and rsi_val < 50 and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and short_ok
+    strategy.close("LONG")
+if strategy.position_size < 0 and long_ok
+    strategy.close("SHORT")
+
+plot(st, "SuperTrend", color = dir < 0 ? color.green : color.red, linewidth=2)
+plot(ema200, "EMA 200", color=color.yellow, linewidth=1)
+plot(vwap_val, "VWAP", color=color.orange, linewidth=1)
+bgcolor(in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)

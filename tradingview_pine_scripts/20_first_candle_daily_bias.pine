@@ -1,0 +1,168 @@
+//@version=5
+// Strategy 20: First Candle Breakout + Daily Bias
+// Logic:
+//   1. Daily candlestick pattern sets today's bias (Bull / Bear)
+//   2. First 5-min candle (9:15-9:20) sets the range
+//   3. At 9:20, if price breaks first candle in daily bias direction -> ENTER
+//   4. Trade window: 9:20 - 10:30 AM only (capture opening momentum)
+//   5. Max 2 trades per day | TP=50pts | SL=25pts | RR=2:1
+// Budget: 20,000 INR | 1 lot = 75 units | Commission: 100 INR
+strategy("20 - First Candle + Daily Bias (1 Lot)", overlay=true,
+         default_qty_type=strategy.fixed,
+         default_qty_value=75,
+         commission_type=strategy.commission.cash_per_order,
+         commission_value=100)
+
+// ---- Inputs
+tp_points  = input.float(50.0, "Take Profit (points) - wider for opening volatility")
+sl_points  = input.float(25.0, "Stop Loss (points)")
+adx_min    = input.int(15, "Min ADX")
+max_trades = input.int(2, "Max trades per day")
+
+// ============================================================
+// DAILY BIAS (same as Strategy 19)
+// ============================================================
+d_open  = request.security(syminfo.tickerid, "D", open[1],  lookahead=barmerge.lookahead_on)
+d_high  = request.security(syminfo.tickerid, "D", high[1],  lookahead=barmerge.lookahead_on)
+d_low   = request.security(syminfo.tickerid, "D", low[1],   lookahead=barmerge.lookahead_on)
+d_close = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+d2_open  = request.security(syminfo.tickerid, "D", open[2],  lookahead=barmerge.lookahead_on)
+d2_close = request.security(syminfo.tickerid, "D", close[2], lookahead=barmerge.lookahead_on)
+
+d_body  = math.abs(d_close - d_open)
+d_range = d_high - d_low
+d2_body = math.abs(d2_close - d2_open)
+d_uwick = d_high - math.max(d_close, d_open)
+d_lwick = math.min(d_close, d_open) - d_low
+
+d_bull_engulfing = d_close > d_open and d2_close < d2_open and d_close > d2_open and d_open < d2_close and d_body > d2_body
+d_hammer         = d_close > d_open and d_range > 0 and d_lwick >= d_body * 2.0 and d_uwick <= d_body * 0.5
+d_bull_marubozu  = d_close > d_open and d_range > 0 and d_body >= d_range * 0.75
+d_strong_bull    = d_range > 0 and (d_close - d_low) / d_range > 0.70 and d_close > d_open
+
+d_bear_engulfing = d_close < d_open and d2_close > d2_open and d_close < d2_open and d_open > d2_close and d_body > d2_body
+d_shooting_star  = d_close < d_open and d_range > 0 and d_uwick >= d_body * 2.0 and d_lwick <= d_body * 0.5
+d_bear_marubozu  = d_close < d_open and d_range > 0 and d_body >= d_range * 0.75
+d_strong_bear    = d_range > 0 and (d_high - d_close) / d_range > 0.70 and d_close < d_open
+
+daily_bull = (d_bull_engulfing or d_hammer or d_bull_marubozu or d_strong_bull) and not (d_bear_engulfing or d_shooting_star or d_bear_marubozu or d_strong_bear)
+daily_bear = (d_bear_engulfing or d_shooting_star or d_bear_marubozu or d_strong_bear) and not (d_bull_engulfing or d_hammer or d_bull_marubozu or d_strong_bull)
+
+// ============================================================
+// FIRST CANDLE RANGE (9:15 - 9:20 AM)
+// ============================================================
+is_first_candle = not na(time("5", "0915-0920", "Asia/Kolkata"))
+in_session      = not na(time("5", "0920-1030", "Asia/Kolkata"))
+
+var float fc_high      = na
+var float fc_low       = na
+var bool  fc_done      = false
+var int   trades_today = 0
+
+if dayofweek != dayofweek[1]
+    fc_high      := na
+    fc_low       := na
+    fc_done      := false
+    trades_today := 0
+
+// Capture first candle high/low
+if is_first_candle
+    fc_high := na(fc_high) ? high : math.max(fc_high, high)
+    fc_low  := na(fc_low)  ? low  : math.min(fc_low, low)
+
+if not is_first_candle and not na(fc_high)
+    fc_done := true
+
+// First candle direction (adds extra confirmation)
+fc_bullish = not na(fc_high) and fc_high > fc_low
+
+// ============================================================
+// 5-MIN INDICATORS
+// ============================================================
+ema_50   = ta.ema(close, 50)
+ema_200  = ta.ema(close, 200)
+atr_val  = ta.atr(14)
+rsi_val  = ta.rsi(close, 14)
+vwap_val = ta.vwap(hlc3)
+[diplus, diminus, adx_val] = ta.dmi(14, 14)
+
+bull_trend = close > ema_50
+bear_trend = close < ema_50
+no_trade   = strategy.position_size != 0 or trades_today >= max_trades
+
+// ============================================================
+// ENTRY SIGNALS
+// ============================================================
+// Long: daily bias BULL + price breaks above first candle high
+long_ok = fc_done and
+          ta.crossover(close, fc_high) and
+          daily_bull and
+          bull_trend and
+          close > vwap_val and
+          rsi_val > 45 and rsi_val < 75 and
+          adx_val > adx_min and
+          in_session and
+          not no_trade
+
+// Short: daily bias BEAR + price breaks below first candle low
+short_ok = fc_done and
+           ta.crossunder(close, fc_low) and
+           daily_bear and
+           bear_trend and
+           close < vwap_val and
+           rsi_val < 55 and rsi_val > 25 and
+           adx_val > adx_min and
+           in_session and
+           not no_trade
+
+// ---- Execute
+if long_ok
+    strategy.entry("LONG", strategy.long)
+    trades_today := trades_today + 1
+
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+    trades_today := trades_today + 1
+
+// ---- TP / SL (wider for opening volatility)
+if strategy.position_size > 0
+    strategy.exit("LONG Exit", "LONG", limit=strategy.position_avg_price + tp_points, stop=strategy.position_avg_price - sl_points)
+
+if strategy.position_size < 0
+    strategy.exit("SHORT Exit", "SHORT", limit=strategy.position_avg_price - tp_points, stop=strategy.position_avg_price + sl_points)
+
+// ============================================================
+// VISUALS
+// ============================================================
+plot(fc_high,  "First Candle High", color=color.new(color.green, 10), style=plot.style_linebr, linewidth=3)
+plot(fc_low,   "First Candle Low",  color=color.new(color.red,   10), style=plot.style_linebr, linewidth=3)
+plot(ema_50,   "EMA 50",  color=color.yellow, linewidth=1)
+plot(ema_200,  "EMA 200", color=color.white,  linewidth=2)
+plot(vwap_val, "VWAP",    color=color.orange, linewidth=1)
+
+bgcolor(is_first_candle  ? color.new(color.yellow, 80) : na, title="First Candle Window")
+bgcolor(in_session       ? color.new(color.blue,   95) : na, title="Trade Window")
+bgcolor(daily_bull and not is_first_candle ? color.new(color.green, 93) : daily_bear and not is_first_candle ? color.new(color.red, 93) : na, title="Daily Bias")
+
+plotshape(long_ok,  "BUY",  shape.triangleup,   location.belowbar, color.green, size=size.large)
+plotshape(short_ok, "SELL", shape.triangledown,  location.abovebar, color.red,   size=size.large)
+
+// ---- Dashboard
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 60), border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "Daily Bias",   text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, daily_bull ? "BULL" : daily_bear ? "BEAR" : "NEUTRAL", text_color=daily_bull ? color.green : daily_bear ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 1, "Daily Pat",    text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 1, d_bull_engulfing ? "Bull Engulf" : d_hammer ? "Hammer" : d_bull_marubozu ? "Bull Maru" : d_strong_bull ? "Strong Bull" : d_bear_engulfing ? "Bear Engulf" : d_shooting_star ? "Shoot Star" : d_bear_marubozu ? "Bear Maru" : d_strong_bear ? "Strong Bear" : "None", text_color=daily_bull ? color.green : daily_bear ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 2, "FC High",      text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 2, na(fc_high) ? "---" : str.tostring(math.round(fc_high, 0)), text_color=color.green, text_size=size.small)
+    table.cell(dash, 0, 3, "FC Low",       text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 3, na(fc_low)  ? "---" : str.tostring(math.round(fc_low,  0)), text_color=color.red,   text_size=size.small)
+    table.cell(dash, 0, 4, "5m Trend",     text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 4, bull_trend ? "BULL" : bear_trend ? "BEAR" : "FLAT", text_color=bull_trend ? color.green : bear_trend ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 5, "RSI",          text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 5, str.tostring(math.round(rsi_val, 1)), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 6, "Trades",       text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 6, str.tostring(trades_today) + "/" + str.tostring(max_trades), text_color=trades_today >= max_trades ? color.red : color.green, text_size=size.small)
+    table.cell(dash, 0, 7, "Window",       text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 7, in_session ? "OPEN 9:20-10:30" : "CLOSED", text_color=in_session ? color.green : color.gray, text_size=size.small)

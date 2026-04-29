@@ -36,8 +36,11 @@ app = FastAPI(title="AI Trading Bot — Webhook Server")
 class TVAlert(BaseModel):
     secret: str
     symbol: str          # e.g. "NIFTY", "BANKNIFTY"
-    action: str          # "BUY" or "SELL"
+    action: str          # "BUY", "SELL", or "EXIT"
     price: float
+    sl: float | None = None        # stop loss price (optional, sent by strategy)
+    target: float | None = None    # take profit price (optional, sent by strategy)
+    qty: int | None = None         # lot size (optional, defaults to 75 = 1 lot Nifty)
     strategy: str = ""
     timeframe: str = "5"
 
@@ -102,13 +105,14 @@ async def receive_alert(request: Request):
 def _make_decision(alert: TVAlert, context: dict, regime: str, risk) -> dict:
     """
     Fuse TradingView signal + AI context + regime filter into a final decision.
-    Returns dict with execute flag, SL, target, qty, reason.
+    Strategy sends fixed TP/SL/qty (e.g. Strategy #17 = TP 40pts, SL 20pts, 75 units).
+    AI layer can REJECT the trade but doesn't override the levels.
     """
-    # Skip if market regime is unfavorable
+    # Gate 1: Skip if market regime is unfavorable
     if regime == "volatile" and alert.action in ("BUY", "SELL"):
         return {"execute": False, "reason": "regime=volatile, skipping directional trade"}
 
-    # Skip if AI technical context disagrees
+    # Gate 2: Skip if AI technical context disagrees with TradingView signal
     tv_action = alert.action
     ai_bias = context.get("bias", "NEUTRAL")
 
@@ -117,21 +121,26 @@ def _make_decision(alert: TVAlert, context: dict, regime: str, risk) -> dict:
     if tv_action == "SELL" and ai_bias == "BULLISH":
         return {"execute": False, "reason": "AI bias disagrees: BULLISH vs SELL alert"}
 
-    # Risk parameters
-    atr = context.get("atr", alert.price * 0.003)  # fallback: 0.3% ATR
-    sl = round(alert.price - atr * 1.5, 2) if tv_action == "BUY" else round(alert.price + atr * 1.5, 2)
-    target = round(alert.price + atr * 3.0, 2) if tv_action == "BUY" else round(alert.price - atr * 3.0, 2)
-    qty = risk.get_position_size(alert.price, sl)
+    # Use fixed TP/SL/qty from strategy if provided, else fall back to ATR-based
+    qty = alert.qty if alert.qty else 75   # default 1 lot Nifty
+    if alert.sl is not None and alert.target is not None:
+        sl = alert.sl
+        target = alert.target
+    else:
+        atr = context.get("atr", alert.price * 0.003)
+        sl = round(alert.price - atr * 1.5, 2) if tv_action == "BUY" else round(alert.price + atr * 1.5, 2)
+        target = round(alert.price + atr * 3.0, 2) if tv_action == "BUY" else round(alert.price - atr * 3.0, 2)
 
-    if qty == 0:
-        return {"execute": False, "reason": "Risk manager: daily loss limit hit or no capital"}
+    # Gate 3: Risk manager (daily loss limit, time-of-day, max positions)
+    if not risk._can_trade():
+        return {"execute": False, "reason": "Risk manager: trading not allowed (loss limit / time / positions)"}
 
     return {
         "execute": True,
         "sl": sl,
         "target": target,
         "qty": qty,
-        "reason": f"regime={regime} | ai_bias={ai_bias} | atr={round(atr,2)}",
+        "reason": f"regime={regime} | ai_bias={ai_bias} | strategy={alert.strategy}",
     }
 
 

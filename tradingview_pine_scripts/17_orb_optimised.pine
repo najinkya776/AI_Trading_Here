@@ -1,0 +1,176 @@
+//@version=5
+// Budget: 20,000 INR | 1 lot Nifty (75 units) | Commission: 100 INR per order
+// ORB-only strategy with relaxed filters for more signals
+// TP=40pts | SL=20pts | RR=2:1 | Max 3 trades/day
+strategy("17 - ORB Optimised (1 Lot)", overlay=true,
+         default_qty_type=strategy.fixed,
+         default_qty_value=75,
+         commission_type=strategy.commission.cash_per_order,
+         commission_value=100)
+
+// ---- Inputs
+tp_points     = input.float(40.0, "Take Profit (points)")
+sl_points     = input.float(20.0, "Stop Loss (points)")
+adx_min       = input.int(16,    "Min ADX")
+body_pct_min  = input.float(0.45, "Min body % of candle")
+candle_min    = input.float(12.0, "Min candle size (points)")
+max_trades    = input.int(3,     "Max trades per day")
+
+// ---- Indicators
+ema_50   = ta.ema(close, 50)
+ema_200  = ta.ema(close, 200)
+atr_val  = ta.atr(14)
+rsi_val  = ta.rsi(close, 14)
+vwap_val = ta.vwap(hlc3)
+[diplus, diminus, adx_val] = ta.dmi(14, 14)
+
+// ---- Time windows
+in_opening = not na(time("5", "0915-0930", "Asia/Kolkata"))
+in_session = not na(time("5", "0930-1400", "Asia/Kolkata"))
+
+// ---- Daily reset
+var float orb_high     = na
+var float orb_low      = na
+var bool  orb_done     = false
+var int   trades_today = 0
+
+if dayofweek != dayofweek[1]
+    orb_high     := na
+    orb_low      := na
+    orb_done     := false
+    trades_today := 0
+
+// ---- Build opening range
+if in_opening
+    orb_high := na(orb_high) ? high : math.max(orb_high, high)
+    orb_low  := na(orb_low)  ? low  : math.min(orb_low, low)
+if not in_opening and not na(orb_high)
+    orb_done := true
+
+// ---- Candle quality filter (relaxed)
+candle_size = high - low
+body_size   = math.abs(close - open)
+bull_body   = (close > open) and candle_size > 0 and (body_size / candle_size > body_pct_min) and (candle_size > candle_min)
+bear_body   = (close < open) and candle_size > 0 and (body_size / candle_size > body_pct_min) and (candle_size > candle_min)
+
+// ---- Trend
+bull_trend = close > ema_50 and close > ema_200
+bear_trend = close < ema_50 and close < ema_200
+
+// ---- Signals
+no_trade  = strategy.position_size != 0 or trades_today >= max_trades
+
+long_ok  = orb_done
+           and ta.crossover(close, orb_high)
+           and bull_body
+           and bull_trend
+           and close > vwap_val
+           and rsi_val > 48 and rsi_val < 72
+           and adx_val > adx_min
+           and in_session
+           and not no_trade
+
+short_ok = orb_done
+           and ta.crossunder(close, orb_low)
+           and bear_body
+           and bear_trend
+           and close < vwap_val
+           and rsi_val < 52 and rsi_val > 28
+           and adx_val > adx_min
+           and in_session
+           and not no_trade
+
+// ---- Re-entry: allow one more trade if price re-tests ORB level after pullback
+// Only when no open position and today's first trade already happened
+orb_retest_long  = orb_done
+                   and close > orb_high
+                   and low <= orb_high * 1.001
+                   and bull_body
+                   and bull_trend
+                   and rsi_val > 45 and rsi_val < 65
+                   and adx_val > adx_min
+                   and in_session
+                   and trades_today >= 1
+                   and not no_trade
+
+orb_retest_short = orb_done
+                   and close < orb_low
+                   and high >= orb_low * 0.999
+                   and bear_body
+                   and bear_trend
+                   and rsi_val < 55 and rsi_val > 35
+                   and adx_val > adx_min
+                   and in_session
+                   and trades_today >= 1
+                   and not no_trade
+
+// ---- Execute
+if long_ok or orb_retest_long
+    strategy.entry("LONG", strategy.long)
+    trades_today := trades_today + 1
+
+if short_ok or orb_retest_short
+    strategy.entry("SHORT", strategy.short)
+    trades_today := trades_today + 1
+
+// ---- Fixed TP / SL
+if strategy.position_size > 0
+    strategy.exit("LONG Exit", "LONG",
+         limit = strategy.position_avg_price + tp_points,
+         stop  = strategy.position_avg_price - sl_points)
+
+if strategy.position_size < 0
+    strategy.exit("SHORT Exit", "SHORT",
+         limit = strategy.position_avg_price - tp_points,
+         stop  = strategy.position_avg_price + sl_points)
+
+// ============================================================
+// WEBHOOK ALERTS — sent to AI bot via /webhook endpoint
+// In TradingView Alert dialog, set Message to: {{strategy.order.alert_message}}
+// ============================================================
+
+// LONG entry alert (includes TP/SL prices computed by strategy)
+if long_ok or orb_retest_long
+    long_tp = close + tp_points
+    long_sl = close - sl_points
+    alert('{"secret":"nifty_orb_2026_x9k3m7p2","symbol":"NIFTY","action":"BUY","price":' + str.tostring(close) + ',"sl":' + str.tostring(long_sl) + ',"target":' + str.tostring(long_tp) + ',"qty":75,"strategy":"17_ORB_Optimised","timeframe":"5"}', alert.freq_once_per_bar_close)
+
+// SHORT entry alert
+if short_ok or orb_retest_short
+    short_tp = close - tp_points
+    short_sl = close + sl_points
+    alert('{"secret":"nifty_orb_2026_x9k3m7p2","symbol":"NIFTY","action":"SELL","price":' + str.tostring(close) + ',"sl":' + str.tostring(short_sl) + ',"target":' + str.tostring(short_tp) + ',"qty":75,"strategy":"17_ORB_Optimised","timeframe":"5"}', alert.freq_once_per_bar_close)
+
+// EXIT alert when strategy closes a position
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    alert('{"secret":"nifty_orb_2026_x9k3m7p2","symbol":"NIFTY","action":"EXIT","price":' + str.tostring(close) + ',"strategy":"17_ORB_Optimised","timeframe":"5"}', alert.freq_once_per_bar_close)
+
+// ---- Visuals
+plot(orb_high, "ORB High", color=color.new(color.green, 20), style=plot.style_linebr, linewidth=2)
+plot(orb_low,  "ORB Low",  color=color.new(color.red,   20), style=plot.style_linebr, linewidth=2)
+plot(ema_50,   "EMA 50",   color=color.yellow, linewidth=1)
+plot(ema_200,  "EMA 200",  color=color.white,  linewidth=2)
+plot(vwap_val, "VWAP",     color=color.orange, linewidth=1)
+
+bgcolor(in_opening ? color.new(color.yellow, 85) : in_session ? color.new(color.blue, 95) : na)
+
+plotshape(long_ok  or orb_retest_long,  "BUY",  shape.triangleup,   location.belowbar, color.green, size=size.large)
+plotshape(short_ok or orb_retest_short, "SELL", shape.triangledown,  location.abovebar, color.red,   size=size.large)
+
+// ---- Dashboard
+var table dash = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 60), border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "ORB H",   text_color=color.white,  text_size=size.small)
+    table.cell(dash, 1, 0, na(orb_high) ? "---" : str.tostring(math.round(orb_high, 0)), text_color=color.green,  text_size=size.small)
+    table.cell(dash, 0, 1, "ORB L",   text_color=color.white,  text_size=size.small)
+    table.cell(dash, 1, 1, na(orb_low)  ? "---" : str.tostring(math.round(orb_low,  0)), text_color=color.red,    text_size=size.small)
+    table.cell(dash, 0, 2, "Trend",   text_color=color.white,  text_size=size.small)
+    table.cell(dash, 1, 2, bull_trend ? "BULL" : bear_trend ? "BEAR" : "FLAT", text_color=bull_trend ? color.green : bear_trend ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 3, "ADX",     text_color=color.white,  text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(math.round(adx_val, 1)), text_color=adx_val > adx_min ? color.green : color.red, text_size=size.small)
+    table.cell(dash, 0, 4, "RSI",     text_color=color.white,  text_size=size.small)
+    table.cell(dash, 1, 4, str.tostring(math.round(rsi_val, 1)), text_color=rsi_val > 72 ? color.red : rsi_val < 28 ? color.lime : color.white, text_size=size.small)
+    table.cell(dash, 0, 5, "Trades",  text_color=color.white,  text_size=size.small)
+    table.cell(dash, 1, 5, str.tostring(trades_today) + "/" + str.tostring(max_trades), text_color=trades_today >= max_trades ? color.red : color.green, text_size=size.small)
+    table.cell(dash, 0, 6, "VWAP",    text_color=color.white,  text_size=size.small)
+    table.cell(dash, 1, 6, str.tostring(math.round(vwap_val, 1)), text_color=color.orange, text_size=size.small)

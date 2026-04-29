@@ -1,0 +1,31 @@
+//@version=5
+strategy("07 - MACD + RSI Filter", overlay=true)
+
+fast_len = input.int(12, "MACD Fast")
+slow_len = input.int(26, "MACD Slow")
+signal_len = input.int(9, "MACD Signal")
+rsi_len = input.int(14, "RSI Period")
+
+[macd_line, signal_line, hist] = ta.macd(close, fast_len, slow_len, signal_len)
+rsi_val = ta.rsi(close, rsi_len)
+vwap_val = ta.vwap(hlc3)
+
+in_session = not na(time("5", "0930-1500", "Asia/Kolkata"))
+
+long_ok = ta.crossover(macd_line, signal_line) and rsi_val > 50 and rsi_val < 65 and close > vwap_val and in_session
+short_ok = ta.crossunder(macd_line, signal_line) and rsi_val < 50 and rsi_val > 35 and close < vwap_val and in_session
+
+if long_ok
+    strategy.entry("LONG", strategy.long)
+if short_ok
+    strategy.entry("SHORT", strategy.short)
+
+if strategy.position_size > 0 and short_ok
+    strategy.close("LONG")
+if strategy.position_size < 0 and long_ok
+    strategy.close("SHORT")
+
+plot(vwap_val, "VWAP", color=color.orange, linewidth=1)
+bgcolor(in_session ? color.new(color.blue, 95) : na)
+plotshape(long_ok, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(short_ok, "SELL", shape.triangledown, location.abovebar, color.red, size=size.small)
