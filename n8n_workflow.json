@@ -1,0 +1,329 @@
+{
+  "id": "775008d5-28b3-45b6-b37d-360006d717fb",
+  "name": "AI Trading Workflow — NSE F&O (4-Agent Pipeline)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-trading-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-trigger",
+      "name": "TradingView Alert",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "webhookId": "tradingview-nse-alert"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate & parse incoming TradingView signal\nconst body = $input.first().json.body || $input.first().json;\n\nconst required = ['symbol', 'action', 'price'];\nfor (const field of required) {\n  if (!body[field]) throw new Error(`Missing required field: ${field}`);\n}\n\nconst action = (body.action || '').toUpperCase();\nif (!['BUY', 'SELL'].includes(action)) {\n  throw new Error(`Invalid action: ${action}. Must be BUY or SELL`);\n}\n\nreturn [{\n  json: {\n    symbol:    (body.symbol || 'NIFTY').toUpperCase(),\n    action:    action,\n    price:     parseFloat(body.price),\n    strategy:  body.strategy  || 'Unknown',\n    timeframe: body.timeframe || '5',\n    timestamp: new Date().toISOString(),\n    secret:    body.secret    || ''\n  }\n}];"
+      },
+      "id": "node-validate-signal",
+      "name": "Validate Signal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key",         "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version",  "value": "2023-06-01" },
+            { "name": "content-type",       "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5-20251001\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are the MarketData Agent for an Indian NSE F&O trading bot. Fetch and summarize market data for the given symbol. Return ONLY valid JSON with keys: current_price, vix, vix_level, pcr, max_pain, oi_buildup, sentiment.\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Provide a realistic simulated market data snapshot for {{ $json.symbol }} on the {{ $json.timeframe }}-minute timeframe. Current price is approximately {{ $json.price }}. Return JSON summary with: current_price, vix (between 12-22), vix_level (low/moderate/high), pcr (0.7-1.4), max_pain (near price), oi_buildup (call_writing or put_writing), sentiment (bullish/bearish/neutral).\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "node-market-data-agent",
+      "name": "Market Data Agent (Haiku)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Market Data Agent response\nconst response = $input.first().json;\nconst signal   = $('Validate Signal').first().json;\n\nlet marketData = {};\ntry {\n  const content = response.content || [];\n  const textBlock = content.find(b => b.type === 'text');\n  let text = textBlock ? textBlock.text.trim() : '{}';\n  if (text.startsWith('```')) {\n    text = text.replace(/```json\\n?|```/g, '').trim();\n  }\n  marketData = JSON.parse(text);\n} catch(e) {\n  marketData = { current_price: signal.price, vix: 15, vix_level: 'moderate', pcr: 1.0, sentiment: 'neutral' };\n}\n\nreturn [{ json: { signal, marketData } }];"
+      },
+      "id": "node-parse-market-data",
+      "name": "Parse Market Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key",         "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version",  "value": "2023-06-01" },
+            { "name": "content-type",       "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5-20251001\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are the SignalAnalysis Agent for NSE F&O intraday trading. Confirm whether a TradingView alert has enough technical evidence to proceed. Analyze 6 indicators: SuperTrend, VWAP, EMA alignment, RSI, MACD, and ADX. Return ONLY valid JSON with keys: confirmed (bool), bias (bullish/bearish), signal_strength (0-100), regime (trending/ranging/volatile), ml_confidence (0.0-1.0), bullish_count (0-6), reason (string).\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"A TradingView alert fired: symbol={{ $json.signal.symbol }}, action={{ $json.signal.action }}, price={{ $json.signal.price }}, strategy={{ $json.signal.strategy }}.\\n\\nMarket context: VIX={{ $json.marketData.vix }} ({{ $json.marketData.vix_level }}), PCR={{ $json.marketData.pcr }}, Options sentiment={{ $json.marketData.sentiment }}.\\n\\nRun signal analysis: check if 4+ of 6 indicators agree with the {{ $json.signal.action }} direction, check market regime (block if VIX>20 or volatile), run ML confidence check. Return JSON decision.\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "node-signal-analysis-agent",
+      "name": "Signal Analysis Agent (Haiku)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Signal Analysis Agent response\nconst response = $input.first().json;\nconst prev     = $('Parse Market Data').first().json;\n\nlet signalAnalysis = {};\ntry {\n  const content = response.content || [];\n  const textBlock = content.find(b => b.type === 'text');\n  let text = textBlock ? textBlock.text.trim() : '{}';\n  if (text.startsWith('```')) {\n    text = text.replace(/```json\\n?|```/g, '').trim();\n  }\n  signalAnalysis = JSON.parse(text);\n} catch(e) {\n  signalAnalysis = { confirmed: false, bias: 'neutral', signal_strength: 0, regime: 'ranging', ml_confidence: 0.5, reason: 'Parse error' };\n}\n\nreturn [{ json: { ...prev, signalAnalysis } }];"
+      },
+      "id": "node-parse-signal",
+      "name": "Parse Signal Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "signal-confirmed-check",
+              "leftValue": "={{ $json.signalAnalysis.confirmed }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-signal-confirmed",
+      "name": "Signal Confirmed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{\n  json: {\n    decision:  'SIGNAL_REJECTED',\n    symbol:    data.signal.symbol,\n    action:    data.signal.action,\n    order_id:  null,\n    entry_price: data.signal.price,\n    qty:       0,\n    stop_loss: 0,\n    target:    0,\n    reason:    data.signalAnalysis.reason || 'Signal not confirmed by technical analysis',\n    agent_results: {\n      market_data:      data.marketData,\n      signal_analysis:  data.signalAnalysis,\n      risk_management:  null,\n      trade_execution:  null\n    }\n  }\n}];"
+      },
+      "id": "node-signal-rejected",
+      "name": "SIGNAL_REJECTED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 460]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key",         "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version",  "value": "2023-06-01" },
+            { "name": "content-type",       "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5-20251001\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are the RiskManagement Agent for NSE F&O intraday trading. Check if a trade is safe to place based on: daily P&L limit (max loss -5000 INR), max open positions (3), position sizing (1% risk rule, max 1 lot = 50 units for NIFTY), and market hours (9:30-15:00 IST only). Return ONLY valid JSON with keys: approved (bool), qty (int), stop_loss (float), target (float), daily_pnl (float), open_positions (int), reason (string).\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Evaluate risk for trade: symbol={{ $json.signal.symbol }}, action={{ $json.signal.action }}, entry_price={{ $json.signal.price }}.\\n\\nSignal strength={{ $json.signalAnalysis.signal_strength }}%, ML confidence={{ $json.signalAnalysis.ml_confidence }}.\\n\\nApply 1% risk rule with ATR-based stop loss (ATR ~100 pts for NIFTY). Check: (1) simulated daily P&L within -5000 INR limit, (2) open positions < 3, (3) current time within 9:30-15:00 IST trading window. Calculate SL = entry - 1.5*ATR for BUY (entry + 1.5*ATR for SELL). Return JSON approval.\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "node-risk-agent",
+      "name": "Risk Management Agent (Haiku)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Risk Management Agent response\nconst response = $input.first().json;\nconst prev     = $('Parse Signal Analysis').first().json;\n\nlet riskData = {};\ntry {\n  const content = response.content || [];\n  const textBlock = content.find(b => b.type === 'text');\n  let text = textBlock ? textBlock.text.trim() : '{}';\n  if (text.startsWith('```')) {\n    text = text.replace(/```json\\n?|```/g, '').trim();\n  }\n  riskData = JSON.parse(text);\n} catch(e) {\n  riskData = { approved: false, qty: 0, stop_loss: 0, target: 0, reason: 'Risk parse error' };\n}\n\n// Calculate target using 1:2 R:R if not provided\nif (riskData.approved && (!riskData.target || riskData.target === 0)) {\n  const entry = prev.signal.price;\n  const sl    = riskData.stop_loss || (prev.signal.action === 'BUY' ? entry - 150 : entry + 150);\n  const risk  = Math.abs(entry - sl);\n  riskData.target = prev.signal.action === 'BUY' ? entry + 2 * risk : entry - 2 * risk;\n}\n\nreturn [{ json: { ...prev, riskData } }];"
+      },
+      "id": "node-parse-risk",
+      "name": "Parse Risk Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 160]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "risk-approved-check",
+              "leftValue": "={{ $json.riskData.approved }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-risk-approved",
+      "name": "Risk Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2200, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{\n  json: {\n    decision:    'TRADE_BLOCKED',\n    symbol:      data.signal.symbol,\n    action:      data.signal.action,\n    order_id:    null,\n    entry_price: data.signal.price,\n    qty:         0,\n    stop_loss:   0,\n    target:      0,\n    reason:      data.riskData.reason || 'Trade blocked by risk management',\n    agent_results: {\n      market_data:     data.marketData,\n      signal_analysis: data.signalAnalysis,\n      risk_management: data.riskData,\n      trade_execution: null\n    }\n  }\n}];"
+      },
+      "id": "node-trade-blocked",
+      "name": "TRADE_BLOCKED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key",         "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version",  "value": "2023-06-01" },
+            { "name": "content-type",       "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5-20251001\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are the TradeExecution Agent. Place a paper (simulated) trade order, log it, and prepare a Telegram notification. Return ONLY valid JSON with keys: order_id (string starting with PAPER_), status (FILLED), symbol, action, qty, entry_price, stop_loss, target, message (Telegram alert text with emoji), logged (bool).\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Execute paper trade: symbol={{ $json.signal.symbol }}, action={{ $json.signal.action }}, price={{ $json.signal.price }}, qty={{ $json.riskData.qty }}, stop_loss={{ $json.riskData.stop_loss }}, target={{ $json.riskData.target }}.\\n\\nGenerate a unique order ID (format: PAPER_YYYYMMDDHHMMSS_XXXX), confirm FILLED status, and write a clear Telegram alert message with trade details and emojis. Return JSON.\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "node-execution-agent",
+      "name": "Trade Execution Agent (Haiku)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2420, 20]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Trade Execution Agent response\nconst response = $input.first().json;\nconst prev     = $('Parse Risk Data').first().json;\n\nlet execData = {};\ntry {\n  const content = response.content || [];\n  const textBlock = content.find(b => b.type === 'text');\n  let text = textBlock ? textBlock.text.trim() : '{}';\n  if (text.startsWith('```')) {\n    text = text.replace(/```json\\n?|```/g, '').trim();\n  }\n  execData = JSON.parse(text);\n} catch(e) {\n  const now = new Date().toISOString().replace(/[-:.T]/g,'').slice(0,14);\n  execData = {\n    order_id:    `PAPER_${now}_${Math.floor(Math.random()*9000)+1000}`,\n    status:      'FILLED',\n    symbol:      prev.signal.symbol,\n    action:      prev.signal.action,\n    qty:         prev.riskData.qty,\n    entry_price: prev.signal.price,\n    stop_loss:   prev.riskData.stop_loss,\n    target:      prev.riskData.target,\n    message:     `📊 PAPER TRADE\\n${prev.signal.action} ${prev.signal.symbol} @ ₹${prev.signal.price}\\nQty: ${prev.riskData.qty} | SL: ₹${prev.riskData.stop_loss} | Target: ₹${prev.riskData.target}`,\n    logged:      true\n  };\n}\n\nconst finalResult = {\n  decision:    'TRADE_PLACED',\n  symbol:      prev.signal.symbol,\n  action:      prev.signal.action,\n  order_id:    execData.order_id,\n  entry_price: execData.entry_price || prev.signal.price,\n  qty:         execData.qty         || prev.riskData.qty,\n  stop_loss:   execData.stop_loss   || prev.riskData.stop_loss,\n  target:      execData.target      || prev.riskData.target,\n  reason:      `${prev.signal.strategy} — ${prev.signalAnalysis.reason || 'AI-confirmed signal'}`,\n  telegram_msg: execData.message,\n  agent_results: {\n    market_data:     prev.marketData,\n    signal_analysis: prev.signalAnalysis,\n    risk_management: prev.riskData,\n    trade_execution: execData\n  }\n};\n\nreturn [{ json: finalResult }];"
+      },
+      "id": "node-parse-execution",
+      "name": "Parse Execution Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 20]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge all pipeline results into one for Telegram & response\nconst items = $input.all();\nreturn items.map(item => ({ json: item.json }));"
+      },
+      "id": "node-merge-results",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2860, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=🤖 *AI Trading Bot — {{ $json.decision }}*\n\n*Symbol:* {{ $json.symbol }}\n*Action:* {{ $json.action }}\n*Entry:* ₹{{ $json.entry_price }}\n*Qty:* {{ $json.qty }}\n*Stop Loss:* ₹{{ $json.stop_loss }}\n*Target:* ₹{{ $json.target }}\n\n*Reason:* {{ $json.reason }}\n\n_Signal Strength: {{ $json.agent_results.signal_analysis ? $json.agent_results.signal_analysis.signal_strength : 'N/A' }}% | ML Confidence: {{ $json.agent_results.signal_analysis ? $json.agent_results.signal_analysis.ml_confidence : 'N/A' }}_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "node-telegram",
+      "name": "Telegram Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [3080, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "node-respond",
+      "name": "Respond to TradingView",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3300, 200]
+    }
+  ],
+  "connections": {
+    "TradingView Alert": {
+      "main": [[{ "node": "Validate Signal", "type": "main", "index": 0 }]]
+    },
+    "Validate Signal": {
+      "main": [[{ "node": "Market Data Agent (Haiku)", "type": "main", "index": 0 }]]
+    },
+    "Market Data Agent (Haiku)": {
+      "main": [[{ "node": "Parse Market Data", "type": "main", "index": 0 }]]
+    },
+    "Parse Market Data": {
+      "main": [[{ "node": "Signal Analysis Agent (Haiku)", "type": "main", "index": 0 }]]
+    },
+    "Signal Analysis Agent (Haiku)": {
+      "main": [[{ "node": "Parse Signal Analysis", "type": "main", "index": 0 }]]
+    },
+    "Parse Signal Analysis": {
+      "main": [[{ "node": "Signal Confirmed?", "type": "main", "index": 0 }]]
+    },
+    "Signal Confirmed?": {
+      "main": [
+        [{ "node": "Risk Management Agent (Haiku)", "type": "main", "index": 0 }],
+        [{ "node": "SIGNAL_REJECTED", "type": "main", "index": 0 }]
+      ]
+    },
+    "Risk Management Agent (Haiku)": {
+      "main": [[{ "node": "Parse Risk Data", "type": "main", "index": 0 }]]
+    },
+    "Parse Risk Data": {
+      "main": [[{ "node": "Risk Approved?", "type": "main", "index": 0 }]]
+    },
+    "Risk Approved?": {
+      "main": [
+        [{ "node": "Trade Execution Agent (Haiku)", "type": "main", "index": 0 }],
+        [{ "node": "TRADE_BLOCKED", "type": "main", "index": 0 }]
+      ]
+    },
+    "Trade Execution Agent (Haiku)": {
+      "main": [[{ "node": "Parse Execution Result", "type": "main", "index": 0 }]]
+    },
+    "Parse Execution Result": {
+      "main": [[{ "node": "Merge Results", "type": "main", "index": 0 }]]
+    },
+    "SIGNAL_REJECTED": {
+      "main": [[{ "node": "Merge Results", "type": "main", "index": 0 }]]
+    },
+    "TRADE_BLOCKED": {
+      "main": [[{ "node": "Merge Results", "type": "main", "index": 0 }]]
+    },
+    "Merge Results": {
+      "main": [[{ "node": "Telegram Notification", "type": "main", "index": 0 }]]
+    },
+    "Telegram Notification": {
+      "main": [[{ "node": "Respond to TradingView", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

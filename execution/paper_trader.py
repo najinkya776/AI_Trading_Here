@@ -2,6 +2,7 @@
 Paper Trade Executor — simulates trades with virtual money (no real orders).
 Tracks portfolio, open positions, PnL, and writes a trade log to SQLite.
 """
+import json
 import uuid
 import logging
 from datetime import datetime
@@ -18,19 +19,21 @@ engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
-    id          TEXT PRIMARY KEY,
-    symbol      TEXT,
-    action      TEXT,
-    entry_price REAL,
-    sl          REAL,
-    target      REAL,
-    qty         INTEGER,
-    entry_time  TEXT,
-    exit_price  REAL,
-    exit_time   TEXT,
-    pnl         REAL,
-    status      TEXT,
-    reason      TEXT
+    id            TEXT PRIMARY KEY,
+    symbol        TEXT,
+    action        TEXT,
+    entry_price   REAL,
+    sl            REAL,
+    target        REAL,
+    qty           INTEGER,
+    entry_time    TEXT,
+    exit_price    REAL,
+    exit_time     TEXT,
+    pnl           REAL,
+    status        TEXT,
+    reason        TEXT,
+    snapshot_json TEXT DEFAULT '',
+    ai_json       TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS portfolio (
     key   TEXT PRIMARY KEY,
@@ -38,10 +41,21 @@ CREATE TABLE IF NOT EXISTS portfolio (
 );
 """
 
+# Migration: add new columns to existing DBs that predate this schema
+_MIGRATIONS = [
+    "ALTER TABLE trades ADD COLUMN snapshot_json TEXT DEFAULT ''",
+    "ALTER TABLE trades ADD COLUMN ai_json       TEXT DEFAULT ''",
+]
+
 with engine.connect() as conn:
     for stmt in _SCHEMA.strip().split(";"):
         if stmt.strip():
             conn.execute(text(stmt))
+    for migration in _MIGRATIONS:
+        try:
+            conn.execute(text(migration))
+        except Exception:
+            pass  # column already exists — safe to ignore
     conn.commit()
 
 
@@ -60,6 +74,8 @@ class Position:
     pnl: float = 0.0
     status: str = "OPEN"  # OPEN | CLOSED
     reason: str = ""
+    snapshot_json: str = ""   # JSON-encoded market snapshot captured at entry
+    ai_json: str = ""         # JSON-encoded full AI decision dict
 
 
 class PaperTrader:
@@ -69,8 +85,18 @@ class PaperTrader:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def place_order(self, symbol: str, action: str, price: float,
-                    sl: float, target: float, qty: int, reason: str = "") -> dict:
+    def place_order(
+        self,
+        symbol: str,
+        action: str,
+        price: float,
+        sl: float,
+        target: float,
+        qty: int,
+        reason: str = "",
+        snapshot: dict | None = None,
+        ai_json_str: str = "",
+    ) -> dict:
         if action == "EXIT":
             return self._exit_position(symbol, price)
 
@@ -87,6 +113,8 @@ class PaperTrader:
             qty=qty,
             entry_time=datetime.now(IST).isoformat(),
             reason=reason,
+            snapshot_json=json.dumps(snapshot, default=str) if snapshot else "",
+            ai_json=ai_json_str,
         )
         self.open_positions.append(pos)
         self._save_position(pos)
@@ -143,6 +171,31 @@ class PaperTrader:
         self._notify(f"EXIT {pos.symbol} | {reason} | PnL={pos.pnl}")
         log.info(f"Paper EXIT | {pos.id} | {reason} | PnL={pos.pnl}")
 
+        # ── Feedback loop: save outcome to trade memory for AI learning ──────
+        self._save_to_trade_memory(pos)
+
+    def _save_to_trade_memory(self, pos: Position):
+        """Record closed trade outcome so MarketAnalyst learns from real results."""
+        try:
+            from agents.trade_memory import TradeMemory
+            snapshot = json.loads(pos.snapshot_json) if pos.snapshot_json else {}
+            ai_data  = json.loads(pos.ai_json)       if pos.ai_json       else {}
+            strategy = ai_data.get("strategy", ai_data.get("time_window", ""))
+            TradeMemory().save_outcome(
+                trade_id=pos.id,
+                symbol=pos.symbol,
+                action=pos.action,
+                entry=pos.entry_price,
+                sl=pos.sl,
+                target=pos.target,
+                exit_price=pos.exit_price,
+                pnl=pos.pnl,
+                strategy=strategy,
+                conditions_snapshot=snapshot,
+            )
+        except Exception as e:
+            log.warning(f"Trade memory save failed for {pos.id}: {e}")
+
     def _exit_position(self, symbol: str, price: float) -> dict:
         matches = [p for p in self.open_positions if p.symbol == symbol]
         if not matches:
@@ -157,8 +210,12 @@ class PaperTrader:
     def _save_position(self, pos: Position):
         with engine.connect() as conn:
             conn.execute(text(
-                "INSERT INTO trades VALUES (:id,:symbol,:action,:entry_price,:sl,:target,:qty,"
-                ":entry_time,:exit_price,:exit_time,:pnl,:status,:reason)"
+                "INSERT INTO trades "
+                "(id,symbol,action,entry_price,sl,target,qty,entry_time,"
+                " exit_price,exit_time,pnl,status,reason,snapshot_json,ai_json) "
+                "VALUES "
+                "(:id,:symbol,:action,:entry_price,:sl,:target,:qty,:entry_time,"
+                " :exit_price,:exit_time,:pnl,:status,:reason,:snapshot_json,:ai_json)"
             ), asdict(pos))
             conn.commit()
 
@@ -174,12 +231,12 @@ class PaperTrader:
     def _load_open_positions(self) -> list[Position]:
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT * FROM trades WHERE status='OPEN'")).fetchall()
-        return [Position(*r) for r in rows]
+        return [_row_to_position(r) for r in rows]
 
     def _load_all_positions(self) -> list[Position]:
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT * FROM trades")).fetchall()
-        return [Position(*r) for r in rows]
+        return [_row_to_position(r) for r in rows]
 
     def _load_capital(self) -> float:
         with engine.connect() as conn:
@@ -210,3 +267,11 @@ class PaperTrader:
             asyncio.run(send_message(msg))
         except Exception:
             pass  # notifications are best-effort
+
+
+def _row_to_position(r) -> Position:
+    """Unpack a DB row into Position, padding missing columns for old DBs."""
+    cols = list(r)
+    while len(cols) < 15:   # snapshot_json and ai_json may be absent in very old rows
+        cols.append("")
+    return Position(*cols)

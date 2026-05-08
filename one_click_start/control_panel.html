@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Trading Bot — Control Panel</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg:       #070c18;
+  --surface:  #0e1628;
+  --surface2: #162035;
+  --border:   #1e2d4a;
+  --text:     #c8d6f0;
+  --muted:    #5a7399;
+  --green:    #00d68f;
+  --red:      #ff4757;
+  --yellow:   #ffd32a;
+  --blue:     #4e9cff;
+  --purple:   #a855f7;
+  --mono:     'Consolas', 'Courier New', monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+}
+
+/* ── Header ── */
+.header {
+  background: var(--surface);
+  border-bottom: 2px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header-left { display: flex; align-items: center; gap: 14px; }
+.logo { font-size: 28px; }
+.bot-title { font-size: 18px; font-weight: 700; color: #e8f0ff; letter-spacing: 0.3px; }
+.bot-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.clock {
+  font-family: var(--mono);
+  font-size: 16px;
+  color: var(--blue);
+  background: var(--surface2);
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.refresh-pill {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.refresh-pill b { color: var(--green); }
+
+/* ── Layout ── */
+.main { padding: 18px 24px; max-width: 1700px; margin: 0 auto; }
+.section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+  margin-top: 18px;
+}
+
+/* ── Service Cards ── */
+.services-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.svc-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 13px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.svc-card.online  { border-left: 3px solid var(--green); }
+.svc-card.offline { border-left: 3px solid var(--red); box-shadow: inset 2px 0 8px rgba(255,71,87,0.05); }
+.svc-card.pending { border-left: 3px solid var(--yellow); }
+.dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot.green  { background: var(--green); box-shadow: 0 0 8px var(--green); animation: blink 2s infinite; }
+.dot.red    { background: var(--red); }
+.dot.yellow { background: var(--yellow); animation: blink 1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.svc-info { flex: 1; }
+.svc-name { font-weight: 700; font-size: 13px; color: #e8f0ff; }
+.svc-port { font-size: 11px; color: var(--muted); }
+.svc-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 12px;
+}
+.svc-badge.online  { background: rgba(0,214,143,0.15); color: var(--green); }
+.svc-badge.offline { background: rgba(255,71,87,0.12); color: var(--red); }
+.svc-badge.pending { background: rgba(255,211,42,0.12); color: var(--yellow); }
+
+/* ── ngrok Banner ── */
+.ngrok-banner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--purple);
+  border-radius: 10px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.ngrok-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--purple); white-space: nowrap;
+}
+.ngrok-url {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: #e8f0ff;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.copy-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+.copy-btn:hover { background: var(--border); color: #fff; }
+.copy-btn.ok { color: var(--green); border-color: var(--green); }
+
+/* ── Stats ── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.stat-val { font-size: 22px; font-weight: 700; font-family: var(--mono); color: #e8f0ff; line-height: 1; }
+.stat-val.g { color: var(--green); }
+.stat-val.r { color: var(--red); }
+.stat-sub { font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+/* ── Quick Actions ── */
+.actions-bar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 13px 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.actions-label { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-right: 6px; }
+.abtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 16px; border-radius: 7px; font-size: 12px; font-weight: 600;
+  text-decoration: none; cursor: pointer; border: 1px solid transparent;
+  transition: all 0.15s;
+}
+.abtn-g  { background: rgba(0,214,143,0.12); color: var(--green);  border-color: rgba(0,214,143,0.25); }
+.abtn-b  { background: rgba(78,156,255,0.12); color: var(--blue);   border-color: rgba(78,156,255,0.25); }
+.abtn-p  { background: rgba(168,85,247,0.12); color: var(--purple); border-color: rgba(168,85,247,0.25); }
+.abtn-y  { background: rgba(255,211,42,0.1);  color: var(--yellow); border-color: rgba(255,211,42,0.25); }
+.abtn-r  { background: rgba(255,71,87,0.1);   color: var(--red);    border-color: rgba(255,71,87,0.25); }
+.abtn:hover { opacity: 0.85; transform: translateY(-1px); }
+
+/* ── Content Grid ── */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+/* ── Panel Card ── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.panel-head {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.panel-title { font-size: 13px; font-weight: 700; color: #e8f0ff; }
+.pill {
+  background: var(--surface2);
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.panel-body { padding: 14px 16px; max-height: 340px; overflow-y: auto; }
+
+/* ── Position Item ── */
+.pos-item {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.pos-item:last-child { margin-bottom: 0; }
+.pos-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.pos-sym { font-weight: 700; font-size: 15px; color: #e8f0ff; }
+.pos-act {
+  font-size: 10px; font-weight: 700; padding: 2px 9px; border-radius: 4px;
+}
+.pos-act.buy  { background: rgba(0,214,143,0.15); color: var(--green); }
+.pos-act.sell { background: rgba(255,71,87,0.15);  color: var(--red); }
+.pos-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.pos-cell .lbl { font-size: 10px; color: var(--muted); }
+.pos-cell .val { font-size: 13px; font-family: var(--mono); color: #e8f0ff; }
+
+/* ── Decision Item ── */
+.dec-item {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+.dec-item:last-child { border-bottom: none; padding-bottom: 0; }
+.dec-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+.dec-sym { font-weight: 700; font-size: 13px; color: #e8f0ff; }
+.dec-time { font-size: 11px; color: var(--muted); }
+.dec-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 9px; border-radius: 4px;
+}
+.dec-badge.buy  { background: rgba(0,214,143,0.15); color: var(--green); }
+.dec-badge.sell { background: rgba(255,71,87,0.15);  color: var(--red); }
+.dec-badge.skip { background: rgba(90,115,153,0.2);  color: var(--muted); }
+.conf-bar { height: 4px; background: var(--border); border-radius: 2px; margin: 5px 0; }
+.conf-fill { height: 100%; border-radius: 2px; }
+.dec-meta { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.dec-conf { font-size: 11px; color: var(--muted); }
+.dec-strat { font-size: 10px; color: var(--muted); font-style: italic; }
+.dec-reason { font-size: 11px; color: var(--muted); line-height: 1.5; }
+
+/* ── Trades Table ── */
+.trades-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.trades-tbl th {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--muted); text-align: left; padding: 10px 12px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.trades-tbl td { padding: 9px 12px; border-bottom: 1px solid rgba(30,45,74,0.4); white-space: nowrap; }
+.trades-tbl tr:last-child td { border-bottom: none; }
+.trades-tbl tr:hover td { background: var(--surface2); }
+.pnl-g { color: var(--green); font-weight: 700; font-family: var(--mono); }
+.pnl-r { color: var(--red);   font-weight: 700; font-family: var(--mono); }
+.badge-open   { background: rgba(78,156,255,0.15); color: var(--blue);  font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 3px; }
+.badge-closed { background: rgba(90,115,153,0.15); color: var(--muted); font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 3px; }
+
+/* ── Empty ── */
+.empty { text-align: center; padding: 28px; color: var(--muted); font-size: 13px; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Responsive ── */
+@media (max-width: 1300px) {
+  .stats-row { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 960px) {
+  .services-row { grid-template-columns: repeat(2, 1fr); }
+  .grid2 { grid-template-columns: 1fr; }
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ HEADER ═══════════ -->
+<div class="header">
+  <div class="header-left">
+    <div class="logo">🤖</div>
+    <div>
+      <div class="bot-title">AI Trading Bot — Control Panel</div>
+      <div class="bot-sub">NSE F&amp;O Intraday &nbsp;·&nbsp; Paper Trading &nbsp;·&nbsp; Claude Opus 4.7</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="clock" id="clock">--:--:-- IST</div>
+    <div class="refresh-pill" onclick="refreshAll()">
+      Auto-refresh <b id="cdown">10</b>s &nbsp;↺
+    </div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- ═══════════ SERVICE STATUS ═══════════ -->
+  <div class="section-label">Service Status</div>
+  <div class="services-row">
+    <div class="svc-card pending" id="c-webhook">
+      <div class="dot yellow" id="d-webhook"></div>
+      <div class="svc-info">
+        <div class="svc-name">Webhook Server</div>
+        <div class="svc-port">localhost:8000 &nbsp;·&nbsp; FastAPI + Claude</div>
+      </div>
+      <div class="svc-badge pending" id="s-webhook">…</div>
+    </div>
+    <div class="svc-card pending" id="c-n8n">
+      <div class="dot yellow" id="d-n8n"></div>
+      <div class="svc-info">
+        <div class="svc-name">n8n Workflow</div>
+        <div class="svc-port">localhost:5678 &nbsp;·&nbsp; Automation</div>
+      </div>
+      <div class="svc-badge pending" id="s-n8n">…</div>
+    </div>
+    <div class="svc-card pending" id="c-streamlit">
+      <div class="dot yellow" id="d-streamlit"></div>
+      <div class="svc-info">
+        <div class="svc-name">Dashboard</div>
+        <div class="svc-port">localhost:8501 &nbsp;·&nbsp; Streamlit</div>
+      </div>
+      <div class="svc-badge pending" id="s-streamlit">…</div>
+    </div>
+    <div class="svc-card pending" id="c-ngrok">
+      <div class="dot yellow" id="d-ngrok"></div>
+      <div class="svc-info">
+        <div class="svc-name">ngrok Tunnel</div>
+        <div class="svc-port">localhost:4040 &nbsp;·&nbsp; TradingView link</div>
+      </div>
+      <div class="svc-badge pending" id="s-ngrok">…</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ NGROK URL ═══════════ -->
+  <div class="section-label">TradingView Webhook URL</div>
+  <div class="ngrok-banner">
+    <div class="ngrok-tag">📡 Webhook URL</div>
+    <div class="ngrok-url" id="ngrok-url">Waiting for ngrok…</div>
+    <button class="copy-btn" id="copy-btn" onclick="copyUrl()">📋 Copy</button>
+  </div>
+
+  <!-- ═══════════ QUICK ACTIONS ═══════════ -->
+  <div class="section-label">Quick Actions</div>
+  <div class="actions-bar">
+    <span class="actions-label">Open:</span>
+    <a href="http://localhost:5678"      target="_blank" class="abtn abtn-p">⚡ n8n UI</a>
+    <a href="http://localhost:8501"      target="_blank" class="abtn abtn-b">📊 Dashboard</a>
+    <a href="http://localhost:8000/docs" target="_blank" class="abtn abtn-g">📖 API Docs</a>
+    <a href="http://localhost:4040"      target="_blank" class="abtn abtn-y">🌐 ngrok UI</a>
+    <span class="actions-label" style="margin-left:8px">Test:</span>
+    <button class="abtn abtn-g" onclick="testBuy()">🧪 BUY Signal</button>
+    <button class="abtn abtn-r" onclick="testSell()">🧪 SELL Signal</button>
+  </div>
+
+  <!-- ═══════════ STATS ═══════════ -->
+  <div class="section-label">Performance Overview</div>
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">Capital</div>
+      <div class="stat-val" id="v-capital">—</div>
+      <div class="stat-sub">virtual portfolio</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Today's P&amp;L</div>
+      <div class="stat-val" id="v-pnl">—</div>
+      <div class="stat-sub" id="v-pnl-sub">realized + open</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Open Positions</div>
+      <div class="stat-val" id="v-open">—</div>
+      <div class="stat-sub">active trades</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total Trades</div>
+      <div class="stat-val" id="v-total">—</div>
+      <div class="stat-sub">in trade memory</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-val" id="v-wr">—</div>
+      <div class="stat-sub" id="v-wr-sub">wins / losses</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Expectancy</div>
+      <div class="stat-val" id="v-exp">—</div>
+      <div class="stat-sub">avg per trade</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ POSITIONS + DECISIONS ═══════════ -->
+  <div class="section-label">Live Trading</div>
+  <div class="grid2">
+
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🟢 Open Positions</div>
+        <div class="pill" id="cnt-pos">0</div>
+      </div>
+      <div class="panel-body" id="body-pos">
+        <div class="empty">No open positions</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🧠 Recent AI Decisions</div>
+        <div class="pill" id="cnt-dec">0</div>
+      </div>
+      <div class="panel-body" id="body-dec">
+        <div class="empty">No decisions yet — waiting for TradingView alerts</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════ TRADES TABLE ═══════════ -->
+  <div class="section-label">Recent Trades</div>
+  <div class="panel" style="margin-bottom: 28px;">
+    <div class="panel-head">
+      <div class="panel-title">📋 Trade Log</div>
+      <div class="pill" id="cnt-trd">0</div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="trades-tbl">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Symbol</th>
+            <th>Dir</th>
+            <th>Entry</th>
+            <th>SL</th>
+            <th>Target</th>
+            <th>Qty</th>
+            <th>P&amp;L</th>
+            <th>Status</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="body-trd">
+          <tr><td colspan="10" class="empty">No trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+let ngrokPublicUrl = '';
+let cdownVal = 10;
+let cdownTimer;
+
+// ── Clock ──────────────────────────────────────────────────
+function tickClock() {
+  const t = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  }).format(new Date());
+  document.getElementById('clock').textContent = t + ' IST';
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+// ── Countdown ──────────────────────────────────────────────
+function startCountdown() {
+  clearInterval(cdownTimer);
+  cdownVal = 10;
+  document.getElementById('cdown').textContent = cdownVal;
+  cdownTimer = setInterval(() => {
+    cdownVal--;
+    document.getElementById('cdown').textContent = cdownVal;
+    if (cdownVal <= 0) { clearInterval(cdownTimer); refreshAll(); }
+  }, 1000);
+}
+
+// ── Service Status ──────────────────────────────────────────
+async function checkSvc(id, url) {
+  const states = { online: ['online','green','ONLINE'], offline: ['offline','red','OFFLINE'] };
+  let ok = false;
+  try {
+    await fetch(url, { mode: 'no-cors', signal: AbortSignal.timeout(3000) });
+    ok = true;
+  } catch (_) {}
+  const [cls, dot, txt] = states[ok ? 'online' : 'offline'];
+  document.getElementById('c-' + id).className = 'svc-card ' + cls;
+  document.getElementById('d-' + id).className = 'dot ' + dot;
+  const b = document.getElementById('s-' + id);
+  b.className = 'svc-badge ' + cls;
+  b.textContent = txt;
+}
+
+// ── ngrok URL ──────────────────────────────────────────────
+async function fetchNgrok() {
+  try {
+    const r = await fetch('http://localhost:4040/api/tunnels', { signal: AbortSignal.timeout(3000) });
+    const d = await r.json();
+    const tun = (d.tunnels || []).find(t => t.proto === 'https');
+    if (tun) {
+      ngrokPublicUrl = tun.public_url + '/webhook';
+      document.getElementById('ngrok-url').textContent = ngrokPublicUrl;
+      // mark ngrok online
+      document.getElementById('c-ngrok').className = 'svc-card online';
+      document.getElementById('d-ngrok').className = 'dot green';
+      const b = document.getElementById('s-ngrok');
+      b.className = 'svc-badge online'; b.textContent = 'ONLINE';
+    } else {
+      document.getElementById('ngrok-url').textContent = 'Tunnel not active yet…';
+    }
+  } catch (_) {
+    document.getElementById('ngrok-url').textContent = 'ngrok offline — run: ngrok http 8000';
+    document.getElementById('c-ngrok').className = 'svc-card offline';
+    document.getElementById('d-ngrok').className = 'dot red';
+    const b = document.getElementById('s-ngrok');
+    b.className = 'svc-badge offline'; b.textContent = 'OFFLINE';
+  }
+}
+
+// ── Copy URL ───────────────────────────────────────────────
+function copyUrl() {
+  if (!ngrokPublicUrl) return;
+  navigator.clipboard.writeText(ngrokPublicUrl).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = '✅ Copied!'; btn.className = 'copy-btn ok';
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.className = 'copy-btn'; }, 2000);
+  });
+}
+
+// ── Trading Status ─────────────────────────────────────────
+async function fetchStatus() {
+  try {
+    const r = await fetch('http://localhost:8000/api/status', { signal: AbortSignal.timeout(5000) });
+    const d = await r.json();
+    renderStats(d);
+    renderPositions(d.open_positions || []);
+    renderDecisions(d.recent_decisions || []);
+    renderTrades(d.recent_trades || []);
+  } catch (_) { /* webhook server offline */ }
+}
+
+function fmt(n) { return (n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 }); }
+function sign(n) { return n >= 0 ? '+' : ''; }
+function cls(n) { return n > 0 ? 'g' : n < 0 ? 'r' : ''; }
+
+function renderStats(d) {
+  const p = d.portfolio || {}, m = d.memory_stats || {};
+  if (p.capital != null) {
+    document.getElementById('v-capital').textContent = '₹' + fmt(p.capital);
+  }
+  if (p.total_daily_pnl != null) {
+    const el = document.getElementById('v-pnl');
+    el.textContent = sign(p.total_daily_pnl) + '₹' + fmt(Math.abs(p.total_daily_pnl));
+    el.className = 'stat-val ' + cls(p.total_daily_pnl);
+    document.getElementById('v-pnl-sub').textContent = 'realized ₹' + fmt(p.daily_realized_pnl || 0);
+  }
+  if (p.open_positions != null) document.getElementById('v-open').textContent = p.open_positions;
+  if (m.total != null) document.getElementById('v-total').textContent = m.total;
+  if (m.win_rate_pct != null) {
+    const el = document.getElementById('v-wr');
+    el.textContent = m.win_rate_pct + '%';
+    el.className = 'stat-val ' + (m.win_rate_pct >= 55 ? 'g' : m.win_rate_pct < 45 ? 'r' : '');
+    document.getElementById('v-wr-sub').textContent = m.wins + 'W / ' + m.losses + 'L';
+  }
+  if (m.expectancy != null) {
+    const el = document.getElementById('v-exp');
+    el.textContent = sign(m.expectancy) + '₹' + fmt(Math.abs(m.expectancy));
+    el.className = 'stat-val ' + cls(m.expectancy);
+  }
+}
+
+function renderPositions(arr) {
+  document.getElementById('cnt-pos').textContent = arr.length;
+  if (!arr.length) {
+    document.getElementById('body-pos').innerHTML = '<div class="empty">No open positions</div>';
+    return;
+  }
+  document.getElementById('body-pos').innerHTML = arr.map(p => {
+    const riskPerUnit = Math.abs((p.entry_price || 0) - (p.sl || 0)).toFixed(0);
+    const rr = p.entry_price && p.sl && p.target
+      ? (Math.abs((p.target - p.entry_price) / (p.entry_price - p.sl))).toFixed(1)
+      : '—';
+    return `
+    <div class="pos-item">
+      <div class="pos-top">
+        <div class="pos-sym">${p.symbol}</div>
+        <div class="pos-act ${p.action === 'BUY' ? 'buy' : 'sell'}">${p.action}</div>
+      </div>
+      <div class="pos-grid">
+        <div class="pos-cell"><div class="lbl">Entry</div><div class="val">₹${fmt(p.entry_price)}</div></div>
+        <div class="pos-cell"><div class="lbl">Stop Loss</div><div class="val" style="color:var(--red)">₹${fmt(p.sl)}</div></div>
+        <div class="pos-cell"><div class="lbl">Target</div><div class="val" style="color:var(--green)">₹${fmt(p.target)}</div></div>
+        <div class="pos-cell"><div class="lbl">Qty</div><div class="val">${p.qty}</div></div>
+        <div class="pos-cell"><div class="lbl">Risk/unit</div><div class="val">₹${riskPerUnit}</div></div>
+        <div class="pos-cell"><div class="lbl">R:R</div><div class="val">1:${rr}</div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderDecisions(arr) {
+  document.getElementById('cnt-dec').textContent = arr.length;
+  if (!arr.length) {
+    document.getElementById('body-dec').innerHTML =
+      '<div class="empty">No decisions yet — waiting for TradingView alerts</div>';
+    return;
+  }
+  const sorted = [...arr].reverse();
+  document.getElementById('body-dec').innerHTML = sorted.map(d => {
+    const conf = Math.round((d.confidence || 0) * 100);
+    const dec  = (d.decision || 'SKIP').toUpperCase();
+    const bc   = dec === 'BUY' ? 'buy' : dec === 'SELL' ? 'sell' : 'skip';
+    const fc   = dec === 'BUY' ? 'var(--green)' : dec === 'SELL' ? 'var(--red)' : 'var(--muted)';
+    const reason = (d.reasoning || '').slice(0, 130) + ((d.reasoning || '').length > 130 ? '…' : '');
+    return `
+    <div class="dec-item">
+      <div class="dec-top">
+        <div class="dec-sym">${d.symbol || '?'}</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="dec-badge ${bc}">${dec}</div>
+          <div class="dec-time">${d.time || ''}</div>
+        </div>
+      </div>
+      <div class="conf-bar"><div class="conf-fill" style="width:${conf}%;background:${fc}"></div></div>
+      <div class="dec-meta">
+        <div class="dec-conf">Confidence: <b style="color:${fc}">${conf}%</b></div>
+        <div class="dec-strat">${d.strategy || ''}</div>
+      </div>
+      <div class="dec-reason">${reason}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderTrades(arr) {
+  document.getElementById('cnt-trd').textContent = arr.length;
+  if (!arr.length) {
+    document.getElementById('body-trd').innerHTML =
+      '<tr><td colspan="10" class="empty">No trades recorded yet</td></tr>';
+    return;
+  }
+  document.getElementById('body-trd').innerHTML = arr.map(t => {
+    const pnl = t.pnl || 0;
+    const pnlStr = t.status === 'OPEN' ? '—'
+      : `${sign(pnl)}₹${fmt(Math.abs(pnl))}`;
+    const pnlCls = t.status === 'OPEN' ? '' : (pnl > 0 ? 'pnl-g' : pnl < 0 ? 'pnl-r' : '');
+    const time = (t.entry_time || '').slice(11, 16) || '—';
+    const statusBadge = t.status === 'OPEN'
+      ? '<span class="badge-open">OPEN</span>'
+      : '<span class="badge-closed">CLOSED</span>';
+    const actCls = (t.action || '') === 'BUY' ? 'pos-act buy' : 'pos-act sell';
+    return `
+    <tr>
+      <td style="font-family:var(--mono);font-size:10px;color:var(--muted)">${t.id}</td>
+      <td style="font-weight:700">${t.symbol}</td>
+      <td><span class="${actCls}" style="font-size:9px">${t.action}</span></td>
+      <td style="font-family:var(--mono)">₹${fmt(t.entry_price)}</td>
+      <td style="font-family:var(--mono);color:var(--red)">₹${fmt(t.sl)}</td>
+      <td style="font-family:var(--mono);color:var(--green)">₹${fmt(t.target)}</td>
+      <td>${t.qty}</td>
+      <td class="${pnlCls}">${pnlStr}</td>
+      <td>${statusBadge}</td>
+      <td style="color:var(--muted);font-size:11px">${time}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Test Signals ───────────────────────────────────────────
+async function sendTest(action) {
+  try {
+    const r = await fetch('http://localhost:8000/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret: 'test', symbol: 'NIFTY', action,
+        price: 24500, strategy: 'ControlPanel_Test', timeframe: '5'
+      })
+    });
+    const d = await r.json();
+    const summary = d.status === 'executed'
+      ? `✅ TRADE PLACED\n\nDecision: ${d.ai_decision?.decision}\nConfidence: ${Math.round((d.ai_decision?.confidence||0)*100)}%\n\n${d.ai_decision?.reasoning?.slice(0,200)}`
+      : `ℹ️ ${d.status?.toUpperCase()}\n\n${d.reason || JSON.stringify(d).slice(0,200)}`;
+    alert(summary);
+    await fetchStatus();
+  } catch (e) {
+    alert('⚠️ Webhook server is offline.\n\nStart it first: uvicorn webhook.server:app --port 8000');
+  }
+}
+function testBuy()  { sendTest('BUY'); }
+function testSell() { sendTest('SELL'); }
+
+// ── Main Refresh ───────────────────────────────────────────
+async function refreshAll() {
+  await Promise.all([
+    checkSvc('webhook',   'http://localhost:8000/health'),
+    checkSvc('n8n',       'http://localhost:5678/'),
+    checkSvc('streamlit', 'http://localhost:8501/'),
+    fetchNgrok(),
+    fetchStatus(),
+  ]);
+  startCountdown();
+}
+
+// Boot
+refreshAll();
+</script>
+</body>
+</html>

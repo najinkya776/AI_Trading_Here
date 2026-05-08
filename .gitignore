@@ -10,3 +10,5 @@ venv/
 .idea/
 .vscode/
 *.egg-info/
+.claude/
+logs/trade_memory.json
